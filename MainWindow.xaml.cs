@@ -215,8 +215,19 @@ namespace CInterpreterWpf
                         byte b = snapshot.Memory[info.Address];
                         valueStr = $"{b} ('{(char)b}')";
                     }
+                    else if (info.Type == "float" && !info.IsPointer)
+                    {
+                        float val = BitConverter.ToSingle(snapshot.Memory, info.Address);
+                        valueStr = val.ToString("F3"); // 小数第3位まで表示
+                    }
+                    else if (info.Type == "double" && !info.IsPointer)
+                    {
+                        double val = BitConverter.ToDouble(snapshot.Memory, info.Address);
+                        valueStr = val.ToString("F3");
+                    }
                     else
                     {
+                        // 既存の int 処理
                         int val = BitConverter.ToInt32(snapshot.Memory, info.Address);
                         valueStr = val.ToString();
 

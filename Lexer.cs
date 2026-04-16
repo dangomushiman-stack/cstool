@@ -172,12 +172,17 @@ namespace CInterpreterWpf
         {
             int sc = _column;
             var sb = new StringBuilder();
-            while (char.IsDigit(CurrentChar()))
+            bool hasDot = false;
+
+            // 数字、またはまだ一度も出てきていない小数点を許容
+            while (_position < _source.Length && (char.IsDigit(CurrentChar()) || (!hasDot && CurrentChar() == '.')))
             {
+                if (CurrentChar() == '.') hasDot = true;
                 sb.Append(CurrentChar());
                 Advance();
             }
-            return new Token(TokenType.Number, sb.ToString(), _line, sc);
+
+            return new Token(hasDot ? TokenType.FloatLiteral : TokenType.Number, sb.ToString(), _line, sc);
         }
 
         private Token ReadIdentifierOrKeyword()
@@ -195,6 +200,10 @@ namespace CInterpreterWpf
             {
                 "int" => TokenType.Int,
                 "char" => TokenType.Char,
+                "short" => TokenType.Short,   
+                "long" => TokenType.Long,     
+                "float" => TokenType.Float,   
+                "double" => TokenType.Double,
                 "void" => TokenType.Void,
                 "struct" => TokenType.Struct,
                 "typedef" => TokenType.Typedef,

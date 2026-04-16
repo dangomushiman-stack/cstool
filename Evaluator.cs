@@ -19,7 +19,10 @@ namespace CInterpreterWpf
         public int ElementSize =>
             IsStruct && !IsPointer ? StructSize :
             IsPointer ? 4 :
-            (Type == "char" ? 1 : 4);
+            (Type == "char" ? 1 :
+             Type == "short" ? 2 :
+             Type == "long" || Type == "double" ? 8 : 
+             4); // int, float のデフォルトは 4バイト
 
         public int Size =>
             IsArray ? ElementSize * ArrayLength :
@@ -765,7 +768,14 @@ namespace CInterpreterWpf
 
         private int GetTypeElementSize(string type, bool isPointer)
         {
-            return isPointer ? 4 : (type == "char" ? 1 : 4);
+            if (isPointer) return 4;
+            return type switch {
+                "char" => 1,
+                "short" => 2,
+                "long" => 8,
+                "double" => 8,
+                _ => 4 // int, float
+            };
         }
 
         private void BindVariable(string name, VarInfo info)

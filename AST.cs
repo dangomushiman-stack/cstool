@@ -182,4 +182,8 @@ namespace CInterpreterWpf
     {
         public string AliasName { get; set; }
     }
+    public class FloatNode : IASTNode
+    {
+        public double Value { get; set; }
+    }
 }

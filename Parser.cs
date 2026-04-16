@@ -8,7 +8,7 @@ namespace CInterpreterWpf
         private readonly List<Token> _tokens;
         private int _position;
 
-        // --- typedef用の型記憶辞書を追加 ---
+        // typedef用の型記憶辞書
         private readonly Dictionary<string, TypeInfo> _typedefs = new Dictionary<string, TypeInfo>();
 
         private class TypeInfo
@@ -44,6 +44,14 @@ namespace CInterpreterWpf
                    t == TokenType.SlashAssign;
         }
 
+        // 基本型を判定するヘルパー
+        private bool IsBasicType(TokenType t)
+        {
+            return t == TokenType.Int || t == TokenType.Char || t == TokenType.Void ||
+                   t == TokenType.Short || t == TokenType.Long || 
+                   t == TokenType.Float || t == TokenType.Double;
+        }
+
         public ProgramNode Parse()
         {
             var p = new ProgramNode();
@@ -52,12 +60,11 @@ namespace CInterpreterWpf
             {
                 if (CurrentToken.Type == TokenType.Typedef)
                 {
-                    // typedef は構造体定義を含む可能性があるため、プログラムノードを渡す
                     p.Declarations.Add(ParseTypedef(p));
                 }
                 else if (CurrentToken.Type == TokenType.Struct &&
-                        PeekToken().Type == TokenType.Identifier &&
-                        PeekToken(2).Type == TokenType.LBrace)
+                         PeekToken().Type == TokenType.Identifier &&
+                         PeekToken(2).Type == TokenType.LBrace)
                 {
                     p.Declarations.Add(ParseStructDeclaration());
                 }
@@ -86,28 +93,23 @@ namespace CInterpreterWpf
                 info.IsStruct = true;
                 info.Type = "struct";
 
-                // 1. 構造体名がある場合 (typedef struct Point ...)
                 if (CurrentToken.Type == TokenType.Identifier)
                 {
                     info.StructName = Consume().Value;
                 }
 
-                // 2. 構造体の定義本体がある場合 (typedef struct Point { int x; int y; } ...)
                 if (CurrentToken.Type == TokenType.LBrace)
                 {
                     structDef = new StructDeclNode { Name = info.StructName };
-                    Consume(); // {
+                    Consume(); 
                     while (CurrentToken.Type != TokenType.RBrace)
                     {
                         structDef.Fields.Add(ParseStructField());
                     }
                     Expect(TokenType.RBrace);
-
-                    // 匿名構造体 (typedef struct { ... } Alias;) の場合
-                    // 内部管理用にエイリアス名を構造体名として後でセットする
                 }
             }
-            else if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char || CurrentToken.Type == TokenType.Void)
+            else if (IsBasicType(CurrentToken.Type))
             {
                 info.Type = Consume().Value;
             }
@@ -119,19 +121,20 @@ namespace CInterpreterWpf
                 info.StructName = existing.StructName;
                 info.IsPointer = existing.IsPointer;
             }
+            else
+            {
+                throw new Exception($"Invalid typedef base type at line {CurrentToken.Line}, column {CurrentToken.Column}");
+            }
 
-            // ポインタ指定の処理 (typedef struct Point { ... } *PointerPtr;)
             if (CurrentToken.Type == TokenType.Asterisk)
             {
                 Consume();
                 info.IsPointer = true;
             }
 
-            // エイリアス名 (Pointer)
             string alias = Expect(TokenType.Identifier).Value;
             Expect(TokenType.Semicolon);
 
-            // 匿名構造体だった場合、エイリアス名を構造体名として定義する
             if (structDef != null)
             {
                 if (string.IsNullOrEmpty(structDef.Name))
@@ -139,11 +142,12 @@ namespace CInterpreterWpf
                     structDef.Name = alias;
                     info.StructName = alias;
                 }
-                // Evaluatorが構造体のサイズやフィールドを計算できるようにDeclarationsに追加
-                program.Declarations.Add(structDef);
+                if (program != null)
+                {
+                    program.Declarations.Add(structDef);
+                }
             }
 
-            // 型辞書に登録
             _typedefs[alias] = info;
 
             return new TypedefNode { AliasName = alias };
@@ -164,7 +168,7 @@ namespace CInterpreterWpf
                     return true;
                 }
 
-                if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char)
+                if (IsBasicType(CurrentToken.Type))
                 {
                     Consume();
                     if (CurrentToken.Type == TokenType.Asterisk) Consume();
@@ -173,7 +177,6 @@ namespace CInterpreterWpf
                     return true;
                 }
 
-                // typedefで定義された型名かどうか
                 if (CurrentToken.Type == TokenType.Identifier && _typedefs.ContainsKey(CurrentToken.Value))
                 {
                     Consume();
@@ -223,7 +226,7 @@ namespace CInterpreterWpf
                 field.StructName = Expect(TokenType.Identifier).Value;
                 field.Type = "struct";
             }
-            else if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char)
+            else if (IsBasicType(CurrentToken.Type))
             {
                 field.Type = Consume().Value;
             }
@@ -237,7 +240,7 @@ namespace CInterpreterWpf
             }
             else
             {
-                throw new Exception($"Struct field type error at line {CurrentToken.Line}");
+                throw new Exception($"Struct field type error at line {CurrentToken.Line}, column {CurrentToken.Column}");
             }
 
             if (CurrentToken.Type == TokenType.Asterisk)
@@ -262,7 +265,7 @@ namespace CInterpreterWpf
                 fn.ReturnIsStruct = true;
                 fn.ReturnStructName = Expect(TokenType.Identifier).Value;
             }
-            else if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char || CurrentToken.Type == TokenType.Void)
+            else if (IsBasicType(CurrentToken.Type))
             {
                 fn.ReturnType = Consume().Value;
             }
@@ -272,7 +275,7 @@ namespace CInterpreterWpf
                 fn.ReturnType = td.Type;
                 fn.ReturnIsStruct = td.IsStruct;
                 fn.ReturnStructName = td.StructName;
-                fn.ReturnIsPointer = td.IsPointer; // typedefからの引き継ぎ
+                fn.ReturnIsPointer = td.IsPointer;
             }
             else
             {
@@ -323,7 +326,7 @@ namespace CInterpreterWpf
                 param.StructName = Expect(TokenType.Identifier).Value;
                 param.Type = "struct";
             }
-            else if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char)
+            else if (IsBasicType(CurrentToken.Type))
             {
                 param.Type = Consume().Value;
             }
@@ -355,8 +358,12 @@ namespace CInterpreterWpf
             if (CurrentToken.Type == TokenType.LBrace)
                 return ParseBlock();
 
-            // 型名による変数宣言の判定 (struct, int, char または typedef済の識別子)
-            if (CurrentToken.Type == TokenType.Struct || CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char || 
+            if (CurrentToken.Type == TokenType.Typedef)
+            {
+                return ParseTypedef(null); 
+            }
+
+            if (CurrentToken.Type == TokenType.Struct || IsBasicType(CurrentToken.Type) || 
                (CurrentToken.Type == TokenType.Identifier && _typedefs.ContainsKey(CurrentToken.Value)))
             {
                 return ParseVariableDeclaration(true);
@@ -379,14 +386,6 @@ namespace CInterpreterWpf
                 Consume();
                 Expect(TokenType.Semicolon);
                 return new BreakNode();
-            }
-            if (CurrentToken.Type == TokenType.Typedef)
-            {
-                // ローカルなtypedefにも対応（ただし、今回の簡易Evaluatorではグローバル扱いに近い挙動になります）
-                // 本来は現在のスコープに閉じるべきですが、簡易化のためParserレベルで解決します。
-                // ここでは便宜上、ダミーのProgramNodeを渡すか、共通の辞書を更新します。
-                // 今回はトップレベルでの使用を想定し、既存のParse()の流れを優先してください。
-                return ParseTypedef(null); 
             }
 
             if (CurrentToken.Type == TokenType.Continue)
@@ -420,7 +419,6 @@ namespace CInterpreterWpf
             throw new Exception($"Unknown statement at line {CurrentToken.Line}, column {CurrentToken.Column}");
         }
 
-        // --- 統合・強化された変数宣言パース ---
         private VarDeclNode ParseVariableDeclaration(bool expectSemicolon)
         {
             var v = new VarDeclNode();
@@ -432,7 +430,7 @@ namespace CInterpreterWpf
                 v.IsStruct = true;
                 v.StructName = Expect(TokenType.Identifier).Value;
             }
-            else if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char)
+            else if (IsBasicType(CurrentToken.Type))
             {
                 v.Type = Consume().Value;
             }
@@ -809,7 +807,7 @@ namespace CInterpreterWpf
             IASTNode initializer = null;
             if (CurrentToken.Type != TokenType.Semicolon)
             {
-                if (CurrentToken.Type == TokenType.Struct || CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char ||
+                if (CurrentToken.Type == TokenType.Struct || IsBasicType(CurrentToken.Type) ||
                    (CurrentToken.Type == TokenType.Identifier && _typedefs.ContainsKey(CurrentToken.Value)))
                     initializer = ParseVariableDeclaration(false);
                 else if (IsStartOfAssignment())
@@ -1039,6 +1037,9 @@ namespace CInterpreterWpf
         {
             if (CurrentToken.Type == TokenType.Number)
                 return new NumberNode { Value = int.Parse(Consume().Value) };
+
+            if (CurrentToken.Type == TokenType.FloatLiteral)
+                return new FloatNode { Value = double.Parse(Consume().Value) };
 
             if (CurrentToken.Type == TokenType.StringLiteral)
                 return new StringNode { Value = Consume().Value };
