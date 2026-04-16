@@ -122,6 +122,9 @@ namespace CInterpreterWpf
                 fn.ReturnIsPointer = true;
             }
 
+            if (fn.ReturnIsStruct && !fn.ReturnIsPointer)
+                throw new Exception("Struct return type is not supported yet");
+
             fn.Name = Expect(TokenType.Identifier).Value;
 
             Expect(TokenType.LParen);
@@ -225,16 +228,7 @@ namespace CInterpreterWpf
                 return ParseAssignmentStatement(true);
 
             if (CurrentToken.Type == TokenType.Identifier && PeekToken().Type == TokenType.LParen)
-            {
-                int saved = _position;
-                var expr = ParseExpression();
-                if (CurrentToken.Type == TokenType.Semicolon && expr is FunctionCallNode)
-                {
-                    Expect(TokenType.Semicolon);
-                    return expr;
-                }
-                _position = saved;
-            }
+                return ParseFunctionCallStatement();
 
             if (IsStartOfIncDecStatement())
             {
@@ -292,7 +286,14 @@ namespace CInterpreterWpf
                 }
 
                 if (CurrentToken.Type == TokenType.Assign)
-                    throw new Exception("Struct array initializer is not supported yet");
+                {
+                    Consume();
+
+                    if (CurrentToken.Type == TokenType.LBrace)
+                        throw new Exception("Struct array initializer is not supported yet");
+
+                    throw new Exception("Struct array initializer must be {...}");
+                }
 
                 if (v.IsArrayLengthInferred)
                     throw new Exception("Struct array length may not be omitted");
@@ -305,9 +306,13 @@ namespace CInterpreterWpf
                 {
                     v.Initializer = ParseExpression();
                 }
+                else if (CurrentToken.Type == TokenType.LBrace)
+                {
+                    v.Initializer = ParseStructInitializer();
+                }
                 else
                 {
-                    throw new Exception("Struct initializer is not supported yet");
+                    throw new Exception("Struct initializer must be {...}");
                 }
             }
 
@@ -315,6 +320,34 @@ namespace CInterpreterWpf
                 Expect(TokenType.Semicolon);
 
             return v;
+        }
+
+        private StructInitializerNode ParseStructInitializer()
+        {
+            var init = new StructInitializerNode();
+            Expect(TokenType.LBrace);
+
+            if (CurrentToken.Type != TokenType.RBrace)
+            {
+                init.Elements.Add(ParseStructInitializerElement());
+                while (CurrentToken.Type == TokenType.Comma)
+                {
+                    Consume();
+                    if (CurrentToken.Type == TokenType.RBrace) break;
+                    init.Elements.Add(ParseStructInitializerElement());
+                }
+            }
+
+            Expect(TokenType.RBrace);
+            return init;
+        }
+
+        private IASTNode ParseStructInitializerElement()
+        {
+            if (CurrentToken.Type == TokenType.LBrace)
+                return ParseStructInitializer();
+
+            return ParseExpression();
         }
 
         private bool IsStartOfAssignment()

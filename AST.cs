@@ -55,6 +55,11 @@ namespace CInterpreterWpf
         public List<IASTNode> Elements { get; } = new List<IASTNode>();
     }
 
+    public class StructInitializerNode : IASTNode
+    {
+        public List<IASTNode> Elements { get; } = new List<IASTNode>();
+    }
+
     public class VarDeclNode : IASTNode
     {
         public string Type { get; set; }
