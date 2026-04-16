@@ -1,19 +1,19 @@
-struct Point {
+typedef struct Point_st {
     int x;
     int y;
-};
+}Point;
 
-struct Point *next_ptr(struct Point *p) {
+Point *next_ptr( Point *p) {
     return p + 1;
 }
 
-struct Point *head(struct Point *p) {
+Point *head(Point *p) {
     return p;
 }
 
 
-struct Point g_p;
-struct Point *foo() {
+Point g_p;
+Point *foo() {
     g_p.x=100;
     return &g_p;
 }
@@ -34,8 +34,8 @@ int counter()
 
 
 int main() {
-    struct Point pts[2];
-    struct Point *p;
+    Point pts[2];
+    Point *p;
     
 
     p = pts;
