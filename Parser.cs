@@ -7,6 +7,8 @@ namespace CInterpreterWpf
     {
         private readonly List<Token> _tokens;
         private int _position;
+        private int _anonymousStructCounter = 0;
+        private readonly List<IASTNode> _pendingDeclarations = new List<IASTNode>();
 
         // typedef用の型記憶辞書
         private readonly Dictionary<string, TypeInfo> _typedefs = new Dictionary<string, TypeInfo>();
@@ -35,6 +37,23 @@ namespace CInterpreterWpf
         {
             if (CurrentToken.Type == t) return Consume();
             throw new Exception($"Expected {t}, but got {CurrentToken.Type} at line {CurrentToken.Line}, column {CurrentToken.Column}");
+        }
+
+        private string GenerateAnonymousStructName()
+        {
+            _anonymousStructCounter++;
+            return $"__anon_struct_{_anonymousStructCounter}";
+        }
+
+        private void FlushPendingDeclarations(ProgramNode program)
+        {
+            if (program == null || _pendingDeclarations.Count == 0)
+                return;
+
+            foreach (var d in _pendingDeclarations)
+                program.Declarations.Add(d);
+
+            _pendingDeclarations.Clear();
         }
 
         private bool IsAssignmentOperator(TokenType t)
@@ -101,24 +120,33 @@ namespace CInterpreterWpf
             {
                 if (CurrentToken.Type == TokenType.Typedef)
                 {
-                    p.Declarations.Add(ParseTypedef(p));
+                    var decl = ParseTypedef(p);
+                    FlushPendingDeclarations(p);
+                    p.Declarations.Add(decl);
                 }
                 else if (CurrentToken.Type == TokenType.Struct &&
-                         PeekToken().Type == TokenType.Identifier &&
-                         PeekToken(2).Type == TokenType.LBrace)
+                        PeekToken().Type == TokenType.Identifier &&
+                        PeekToken(2).Type == TokenType.LBrace)
                 {
-                    p.Declarations.Add(ParseStructDeclaration());
+                    var decl = ParseStructDeclaration();
+                    FlushPendingDeclarations(p);
+                    p.Declarations.Add(decl);
                 }
                 else if (IsTopLevelVariableDeclaration())
                 {
-                    p.Declarations.Add(ParseVariableDeclaration(true));
+                    var decl = ParseVariableDeclaration(true);
+                    FlushPendingDeclarations(p);
+                    p.Declarations.Add(decl);
                 }
                 else
                 {
-                    p.Declarations.Add(ParseFunctionDeclaration());
+                    var decl = ParseFunctionDeclaration();
+                    FlushPendingDeclarations(p);
+                    p.Declarations.Add(decl);
                 }
             }
 
+            FlushPendingDeclarations(p);
             return p;
         }
 
@@ -232,12 +260,13 @@ namespace CInterpreterWpf
             }
         }
 
-        private StructDeclNode ParseStructDeclaration()
+        private StructDeclNode ParseStructDeclarationCore(string forcedName = null, bool expectSemicolon = true)
         {
             Expect(TokenType.Struct);
+
             var node = new StructDeclNode
             {
-                Name = Expect(TokenType.Identifier).Value
+                Name = forcedName ?? Expect(TokenType.Identifier).Value
             };
 
             Expect(TokenType.LBrace);
@@ -245,8 +274,16 @@ namespace CInterpreterWpf
                 node.Fields.Add(ParseStructField());
 
             Expect(TokenType.RBrace);
-            Expect(TokenType.Semicolon);
+
+            if (expectSemicolon)
+                Expect(TokenType.Semicolon);
+
             return node;
+        }
+
+        private StructDeclNode ParseStructDeclaration()
+        {
+            return ParseStructDeclarationCore();
         }
 
         private StructFieldDecl ParseStructField()
@@ -255,14 +292,44 @@ namespace CInterpreterWpf
 
             if (CurrentToken.Type == TokenType.Struct)
             {
-                Consume();
-                field.IsStruct = true;
-                field.StructName = Expect(TokenType.Identifier).Value;
-                field.Type = "struct";
+                if (PeekToken().Type == TokenType.LBrace)
+                {
+                    string anonName = GenerateAnonymousStructName();
+                    var anonDecl = ParseStructDeclarationCore(forcedName: anonName, expectSemicolon: false);
+                    _pendingDeclarations.Add(anonDecl);
+
+                    field.Type = "struct";
+                    field.IsStruct = true;
+                    field.StructName = anonName;
+                    ApplyTypeInfo(field, new CTypeInfo
+                    {
+                        Type = "struct",
+                        IsStruct = true,
+                        StructName = anonName
+                    });
+                }
+                else
+                {
+                    Consume();
+                    field.Type = "struct";
+                    field.IsStruct = true;
+                    field.StructName = Expect(TokenType.Identifier).Value;
+
+                    ApplyTypeInfo(field, new CTypeInfo
+                    {
+                        Type = "struct",
+                        IsStruct = true,
+                        StructName = field.StructName
+                    });
+                }
             }
             else if (IsBasicType(CurrentToken.Type))
             {
                 field.Type = Consume().Value;
+                ApplyTypeInfo(field, new CTypeInfo
+                {
+                    Type = field.Type
+                });
             }
             else if (CurrentToken.Type == TokenType.Identifier && _typedefs.TryGetValue(CurrentToken.Value, out var td))
             {
