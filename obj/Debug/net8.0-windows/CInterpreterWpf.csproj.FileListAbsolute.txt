@@ -17,3 +17,4 @@ D:\git_repo\cstool\CInterpreter\CInterpreterWpf\obj\Debug\net8.0-windows\refint\
 D:\git_repo\cstool\CInterpreter\CInterpreterWpf\obj\Debug\net8.0-windows\CInterpreterWpf.pdb
 D:\git_repo\cstool\CInterpreter\CInterpreterWpf\obj\Debug\net8.0-windows\CInterpreterWpf.genruntimeconfig.cache
 D:\git_repo\cstool\CInterpreter\CInterpreterWpf\obj\Debug\net8.0-windows\ref\CInterpreterWpf.dll
+D:\git_repo\cstool\CInterpreter\CInterpreterWpf\obj\Debug\net8.0-windows\CInterpreterWpf.sourcelink.json

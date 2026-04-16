@@ -2,7 +2,7 @@ namespace CInterpreterWpf
 {
     public enum TokenType
     {
-        Int, Char, Void, Return,
+        Int, Char, Void, Struct, Return,
         If, Else, While, For, Do, Break, Continue,
         Identifier, Number, StringLiteral, CharLiteral,
 
@@ -13,7 +13,7 @@ namespace CInterpreterWpf
         LogicalAnd, LogicalOr, LogicalNot,
 
         LParen, RParen, LBrace, RBrace, LBracket, RBracket,
-        Semicolon, Comma,
+        Semicolon, Comma, Dot, Arrow,
         Ampersand, EOF, Unknown
     }
 

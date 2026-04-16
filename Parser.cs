@@ -24,21 +24,105 @@ namespace CInterpreterWpf
             throw new Exception($"Expected {t}, but got {CurrentToken.Type} at line {CurrentToken.Line}, column {CurrentToken.Column}");
         }
 
+        private bool IsAssignmentOperator(TokenType t)
+        {
+            return t == TokenType.Assign ||
+                   t == TokenType.PlusAssign ||
+                   t == TokenType.MinusAssign ||
+                   t == TokenType.AsteriskAssign ||
+                   t == TokenType.SlashAssign;
+        }
+
         public ProgramNode Parse()
         {
             var p = new ProgramNode();
             while (CurrentToken.Type != TokenType.EOF)
-                p.Declarations.Add(ParseFunctionDeclaration());
+            {
+                if (CurrentToken.Type == TokenType.Struct && PeekToken().Type == TokenType.Identifier && PeekToken(2).Type == TokenType.LBrace)
+                    p.Declarations.Add(ParseStructDeclaration());
+                else
+                    p.Declarations.Add(ParseFunctionDeclaration());
+            }
             return p;
+        }
+
+        private StructDeclNode ParseStructDeclaration()
+        {
+            Expect(TokenType.Struct);
+            var node = new StructDeclNode
+            {
+                Name = Expect(TokenType.Identifier).Value
+            };
+
+            Expect(TokenType.LBrace);
+            while (CurrentToken.Type != TokenType.RBrace)
+                node.Fields.Add(ParseStructField());
+
+            Expect(TokenType.RBrace);
+            Expect(TokenType.Semicolon);
+            return node;
+        }
+
+        private StructFieldDecl ParseStructField()
+        {
+            var field = new StructFieldDecl();
+
+            if (CurrentToken.Type == TokenType.Struct)
+            {
+                Consume();
+                field.IsStruct = true;
+                field.StructName = Expect(TokenType.Identifier).Value;
+                field.Type = "struct";
+            }
+            else if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char)
+            {
+                field.Type = Consume().Value;
+            }
+            else
+            {
+                throw new Exception($"Struct field type must be int, char, or struct at line {CurrentToken.Line}, column {CurrentToken.Column}");
+            }
+
+            if (CurrentToken.Type == TokenType.Asterisk)
+            {
+                Consume();
+                field.IsPointer = true;
+            }
+
+            field.Name = Expect(TokenType.Identifier).Value;
+            Expect(TokenType.Semicolon);
+            return field;
         }
 
         private IASTNode ParseFunctionDeclaration()
         {
-            var fn = new FunctionDeclNode
+            var fn = new FunctionDeclNode();
+
+            if (CurrentToken.Type == TokenType.Struct)
             {
-                ReturnType = Consume().Value,
-                Name = Expect(TokenType.Identifier).Value
-            };
+                Consume();
+                fn.ReturnType = "struct";
+                fn.ReturnIsStruct = true;
+                fn.ReturnStructName = Expect(TokenType.Identifier).Value;
+            }
+            else if (CurrentToken.Type == TokenType.Int ||
+                     CurrentToken.Type == TokenType.Char ||
+                     CurrentToken.Type == TokenType.Void)
+            {
+                fn.ReturnType = Consume().Value;
+            }
+            else
+            {
+                throw new Exception($"Invalid function return type at line {CurrentToken.Line}, column {CurrentToken.Column}");
+            }
+
+            if (CurrentToken.Type == TokenType.Asterisk)
+            {
+                Consume();
+                fn.ReturnIsPointer = true;
+            }
+
+            fn.Name = Expect(TokenType.Identifier).Value;
 
             Expect(TokenType.LParen);
 
@@ -64,13 +148,23 @@ namespace CInterpreterWpf
 
         private FunctionParameter ParseFunctionParameter()
         {
-            if (CurrentToken.Type != TokenType.Int && CurrentToken.Type != TokenType.Char)
-                throw new Exception($"Parameter type must be int or char at line {CurrentToken.Line}, column {CurrentToken.Column}");
+            var param = new FunctionParameter();
 
-            var param = new FunctionParameter
+            if (CurrentToken.Type == TokenType.Struct)
             {
-                Type = Consume().Value
-            };
+                Consume();
+                param.IsStruct = true;
+                param.StructName = Expect(TokenType.Identifier).Value;
+                param.Type = "struct";
+            }
+            else if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char)
+            {
+                param.Type = Consume().Value;
+            }
+            else
+            {
+                throw new Exception($"Parameter type must be int, char, or struct at line {CurrentToken.Line}, column {CurrentToken.Column}");
+            }
 
             if (CurrentToken.Type == TokenType.Asterisk)
             {
@@ -86,6 +180,9 @@ namespace CInterpreterWpf
         {
             if (CurrentToken.Type == TokenType.LBrace)
                 return ParseBlock();
+
+            if (CurrentToken.Type == TokenType.Struct)
+                return ParseStructVariableDeclaration(true);
 
             if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char)
                 return ParseVariableDeclaration(true);
@@ -128,7 +225,16 @@ namespace CInterpreterWpf
                 return ParseAssignmentStatement(true);
 
             if (CurrentToken.Type == TokenType.Identifier && PeekToken().Type == TokenType.LParen)
-                return ParseFunctionCallStatement();
+            {
+                int saved = _position;
+                var expr = ParseExpression();
+                if (CurrentToken.Type == TokenType.Semicolon && expr is FunctionCallNode)
+                {
+                    Expect(TokenType.Semicolon);
+                    return expr;
+                }
+                _position = saved;
+            }
 
             if (IsStartOfIncDecStatement())
             {
@@ -140,53 +246,101 @@ namespace CInterpreterWpf
             throw new Exception($"Unknown statement at line {CurrentToken.Line}, column {CurrentToken.Column}");
         }
 
+        private IASTNode ParseStructVariableDeclaration(bool expectSemicolon)
+        {
+            Expect(TokenType.Struct);
+            string structName = Expect(TokenType.Identifier).Value;
+
+            var v = new VarDeclNode
+            {
+                Type = "struct",
+                StructName = structName,
+                IsStruct = true
+            };
+
+            if (CurrentToken.Type == TokenType.Asterisk)
+            {
+                Consume();
+                v.IsPointer = true;
+            }
+
+            v.VarName = Expect(TokenType.Identifier).Value;
+
+            if (CurrentToken.Type == TokenType.LBracket)
+            {
+                if (v.IsPointer)
+                    throw new Exception("Pointer arrays are not supported yet");
+
+                Consume();
+
+                if (CurrentToken.Type == TokenType.RBracket)
+                {
+                    v.IsArray = true;
+                    v.IsArrayLengthInferred = true;
+                    v.ArrayLength = 0;
+                    Consume();
+                }
+                else
+                {
+                    var lengthNode = ParseExpression();
+                    if (lengthNode is not NumberNode len || len.Value <= 0)
+                        throw new Exception("Array length must be a positive integer literal");
+
+                    v.IsArray = true;
+                    v.ArrayLength = len.Value;
+                    Expect(TokenType.RBracket);
+                }
+
+                if (CurrentToken.Type == TokenType.Assign)
+                    throw new Exception("Struct array initializer is not supported yet");
+
+                if (v.IsArrayLengthInferred)
+                    throw new Exception("Struct array length may not be omitted");
+            }
+            else if (CurrentToken.Type == TokenType.Assign)
+            {
+                Consume();
+
+                if (v.IsPointer)
+                {
+                    v.Initializer = ParseExpression();
+                }
+                else
+                {
+                    throw new Exception("Struct initializer is not supported yet");
+                }
+            }
+
+            if (expectSemicolon)
+                Expect(TokenType.Semicolon);
+
+            return v;
+        }
+
         private bool IsStartOfAssignment()
         {
-            if (CurrentToken.Type == TokenType.Asterisk)
-                return true;
-
-            if (CurrentToken.Type != TokenType.Identifier)
-                return false;
-
-            if (PeekToken().Type == TokenType.Assign ||
-                PeekToken().Type == TokenType.PlusAssign ||
-                PeekToken().Type == TokenType.MinusAssign ||
-                PeekToken().Type == TokenType.AsteriskAssign ||
-                PeekToken().Type == TokenType.SlashAssign)
-                return true;
-
-            if (PeekToken().Type != TokenType.LBracket)
-                return false;
-
-            int pos = _position + 1;
-            int depth = 0;
-            while (pos < _tokens.Count)
+            int saved = _position;
+            try
             {
-                var t = _tokens[pos];
-                if (t.Type == TokenType.LBracket) depth++;
-                else if (t.Type == TokenType.RBracket)
+                if (CurrentToken.Type == TokenType.Asterisk)
                 {
-                    depth--;
-                    if (depth == 0)
-                    {
-                        pos++;
-                        break;
-                    }
+                    Consume();
+                    ParseAssignableTarget();
                 }
-                pos++;
-            }
+                else
+                {
+                    ParseAssignableTarget();
+                }
 
-            if (pos < _tokens.Count)
+                bool result = IsAssignmentOperator(CurrentToken.Type);
+                _position = saved;
+                return result;
+            }
+            catch
             {
-                var after = _tokens[pos].Type;
-                return after == TokenType.Assign ||
-                       after == TokenType.PlusAssign ||
-                       after == TokenType.MinusAssign ||
-                       after == TokenType.AsteriskAssign ||
-                       after == TokenType.SlashAssign;
+                _position = saved;
+                return false;
             }
-
-            return false;
         }
 
         private bool IsStartOfIncDecStatement()
@@ -194,40 +348,19 @@ namespace CInterpreterWpf
             if (CurrentToken.Type == TokenType.Increment || CurrentToken.Type == TokenType.Decrement)
                 return true;
 
-            if (CurrentToken.Type != TokenType.Identifier)
-                return false;
-
-            if (PeekToken().Type == TokenType.Increment || PeekToken().Type == TokenType.Decrement)
-                return true;
-
-            if (PeekToken().Type != TokenType.LBracket)
-                return false;
-
-            int pos = _position + 1;
-            int depth = 0;
-            while (pos < _tokens.Count)
+            int saved = _position;
+            try
             {
-                var t = _tokens[pos];
-                if (t.Type == TokenType.LBracket) depth++;
-                else if (t.Type == TokenType.RBracket)
-                {
-                    depth--;
-                    if (depth == 0)
-                    {
-                        pos++;
-                        break;
-                    }
-                }
-                pos++;
+                ParseAssignableTarget();
+                bool result = CurrentToken.Type == TokenType.Increment || CurrentToken.Type == TokenType.Decrement;
+                _position = saved;
+                return result;
             }
-
-            if (pos < _tokens.Count)
+            catch
             {
-                var after = _tokens[pos].Type;
-                return after == TokenType.Increment || after == TokenType.Decrement;
+                _position = saved;
+                return false;
             }
-
-            return false;
         }
 
         private BlockNode ParseBlock()
@@ -378,20 +511,50 @@ namespace CInterpreterWpf
         {
             var node = ParsePrimary();
 
-            while (CurrentToken.Type == TokenType.LBracket)
+            while (true)
             {
-                Consume();
-                var index = ParseExpression();
-                Expect(TokenType.RBracket);
-
-                node = new ArrayAccessNode
+                if (CurrentToken.Type == TokenType.LBracket)
                 {
-                    Target = node,
-                    Index = index
-                };
+                    Consume();
+                    var index = ParseExpression();
+                    Expect(TokenType.RBracket);
+
+                    node = new ArrayAccessNode
+                    {
+                        Target = node,
+                        Index = index
+                    };
+                    continue;
+                }
+
+                if (CurrentToken.Type == TokenType.Dot)
+                {
+                    Consume();
+                    string member = Expect(TokenType.Identifier).Value;
+                    node = new StructMemberAccessNode
+                    {
+                        Target = node,
+                        MemberName = member
+                    };
+                    continue;
+                }
+
+                if (CurrentToken.Type == TokenType.Arrow)
+                {
+                    Consume();
+                    string member = Expect(TokenType.Identifier).Value;
+                    node = new StructPointerMemberAccessNode
+                    {
+                        Target = node,
+                        MemberName = member
+                    };
+                    continue;
+                }
+
+                break;
             }
 
-            if (node is VariableNode || node is ArrayAccessNode)
+            if (node is VariableNode || node is ArrayAccessNode || node is StructMemberAccessNode || node is StructPointerMemberAccessNode)
                 return node;
 
             throw new Exception($"Invalid assignment target at line {CurrentToken.Line}, column {CurrentToken.Column}");
@@ -486,7 +649,9 @@ namespace CInterpreterWpf
             IASTNode initializer = null;
             if (CurrentToken.Type != TokenType.Semicolon)
             {
-                if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char)
+                if (CurrentToken.Type == TokenType.Struct)
+                    initializer = ParseStructVariableDeclaration(false);
+                else if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char)
                     initializer = ParseVariableDeclaration(false);
                 else if (IsStartOfAssignment())
                     initializer = ParseAssignmentStatement(false);
@@ -667,6 +832,30 @@ namespace CInterpreterWpf
                     {
                         Target = node,
                         Index = index
+                    };
+                    continue;
+                }
+
+                if (CurrentToken.Type == TokenType.Dot)
+                {
+                    Consume();
+                    string member = Expect(TokenType.Identifier).Value;
+                    node = new StructMemberAccessNode
+                    {
+                        Target = node,
+                        MemberName = member
+                    };
+                    continue;
+                }
+
+                if (CurrentToken.Type == TokenType.Arrow)
+                {
+                    Consume();
+                    string member = Expect(TokenType.Identifier).Value;
+                    node = new StructPointerMemberAccessNode
+                    {
+                        Target = node,
+                        MemberName = member
                     };
                     continue;
                 }

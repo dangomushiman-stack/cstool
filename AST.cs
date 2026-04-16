@@ -9,16 +9,37 @@ namespace CInterpreterWpf
         public List<IASTNode> Declarations { get; } = new List<IASTNode>();
     }
 
+    public class StructFieldDecl
+    {
+        public string Type { get; set; }
+        public string Name { get; set; }
+        public bool IsPointer { get; set; }
+        public bool IsStruct { get; set; }
+        public string StructName { get; set; }
+    }
+
+    public class StructDeclNode : IASTNode
+    {
+        public string Name { get; set; }
+        public List<StructFieldDecl> Fields { get; } = new List<StructFieldDecl>();
+    }
+
     public class FunctionParameter
     {
         public string Type { get; set; }
         public string Name { get; set; }
         public bool IsPointer { get; set; }
+        public bool IsStruct { get; set; }
+        public string StructName { get; set; }
     }
 
     public class FunctionDeclNode : IASTNode
     {
         public string ReturnType { get; set; }
+        public bool ReturnIsPointer { get; set; }
+        public bool ReturnIsStruct { get; set; }
+        public string ReturnStructName { get; set; }
+
         public string Name { get; set; }
         public List<FunctionParameter> Parameters { get; } = new List<FunctionParameter>();
         public List<IASTNode> Body { get; } = new List<IASTNode>();
@@ -43,6 +64,8 @@ namespace CInterpreterWpf
         public bool IsArray { get; set; }
         public int ArrayLength { get; set; }
         public bool IsArrayLengthInferred { get; set; }
+        public bool IsStruct { get; set; }
+        public string StructName { get; set; }
     }
 
     public class FunctionCallNode : IASTNode
@@ -84,6 +107,18 @@ namespace CInterpreterWpf
     {
         public IASTNode Target { get; set; }
         public IASTNode Index { get; set; }
+    }
+
+    public class StructMemberAccessNode : IASTNode
+    {
+        public IASTNode Target { get; set; }
+        public string MemberName { get; set; }
+    }
+
+    public class StructPointerMemberAccessNode : IASTNode
+    {
+        public IASTNode Target { get; set; }
+        public string MemberName { get; set; }
     }
 
     public class BinaryOpNode : IASTNode

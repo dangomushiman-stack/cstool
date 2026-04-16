@@ -36,6 +36,7 @@ namespace CInterpreterWpf
 
             if (c == '+' && Peek() == '+') return AdvanceTwiceAndCreateToken(TokenType.Increment, "++");
             if (c == '-' && Peek() == '-') return AdvanceTwiceAndCreateToken(TokenType.Decrement, "--");
+            if (c == '-' && Peek() == '>') return AdvanceTwiceAndCreateToken(TokenType.Arrow, "->");
             if (c == '+' && Peek() == '=') return AdvanceTwiceAndCreateToken(TokenType.PlusAssign, "+=");
             if (c == '-' && Peek() == '=') return AdvanceTwiceAndCreateToken(TokenType.MinusAssign, "-=");
             if (c == '*' && Peek() == '=') return AdvanceTwiceAndCreateToken(TokenType.AsteriskAssign, "*=");
@@ -66,6 +67,7 @@ namespace CInterpreterWpf
                 case ']': return AdvanceAndCreateToken(TokenType.RBracket, "]");
                 case ';': return AdvanceAndCreateToken(TokenType.Semicolon, ";");
                 case ',': return AdvanceAndCreateToken(TokenType.Comma, ",");
+                case '.': return AdvanceAndCreateToken(TokenType.Dot, ".");
                 case '&': return AdvanceAndCreateToken(TokenType.Ampersand, "&");
                 case '\'': return ReadCharLiteral();
             }
@@ -194,6 +196,7 @@ namespace CInterpreterWpf
                 "int" => TokenType.Int,
                 "char" => TokenType.Char,
                 "void" => TokenType.Void,
+                "struct" => TokenType.Struct,
                 "return" => TokenType.Return,
                 "if" => TokenType.If,
                 "else" => TokenType.Else,
