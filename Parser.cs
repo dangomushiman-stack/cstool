@@ -295,7 +295,13 @@ namespace CInterpreterWpf
 
             Expect(TokenType.LParen);
 
-            if (CurrentToken.Type != TokenType.RParen)
+            // --- ここから追加・修正 ---
+            // (void) のように単独の void が来た場合は何もしない（引数ゼロ）
+            if (CurrentToken.Type == TokenType.Void && PeekToken().Type == TokenType.RParen)
+            {
+                Consume(); // 'void' を読み飛ばす
+            }
+            else if (CurrentToken.Type != TokenType.RParen)
             {
                 fn.Parameters.Add(ParseFunctionParameter());
                 while (CurrentToken.Type == TokenType.Comma)
@@ -304,6 +310,7 @@ namespace CInterpreterWpf
                     fn.Parameters.Add(ParseFunctionParameter());
                 }
             }
+            // --- ここまで ---
 
             Expect(TokenType.RParen);
             Expect(TokenType.LBrace);
