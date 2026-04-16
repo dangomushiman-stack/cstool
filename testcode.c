@@ -11,7 +11,24 @@ struct Point *head(struct Point *p) {
     return p;
 }
 
+
+struct Point g_p;
 struct Point *foo() {
+    g_p.x=100;
+    return &g_p;
+}
+
+
+int count;
+
+int counter()
+{
+    count++;
+    if(count<10)
+    {
+        printf("count=%d\n",count);
+        counter();
+    }
     return 0;
 }
 
@@ -19,6 +36,7 @@ struct Point *foo() {
 int main() {
     struct Point pts[2];
     struct Point *p;
+    
 
     p = pts;
     pts[0].x = 10;
@@ -30,6 +48,8 @@ int main() {
     printf("%d %d\n", foo()->x, foo()->y);   // foo が struct Point* を返すなら可
     printf("%d\n", next_ptr(p)->x);
     printf("%d\n", head(p)->y);
+
+    counter();
 
     return 0;
 }

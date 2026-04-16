@@ -5,6 +5,13 @@ using System.Text.RegularExpressions;
 
 namespace CInterpreterWpf
 {
+    public enum MemoryRegionKind
+    {
+        Local,
+        Global,
+        Literal
+    }
+
     public class VarInfo
     {
         public int Address { get; set; }
@@ -16,11 +23,7 @@ namespace CInterpreterWpf
         public string StructName { get; set; }
         public int StructSize { get; set; }
 
-        public int ElementSize =>
-            IsStruct && !IsPointer ? StructSize :
-            IsPointer ? 4 :
-            (Type == "char" ? 1 : 4);
-
+        public int ElementSize => IsPointer ? 4 : (Type == "char" ? 1 : 4);
         public int Size =>
             IsArray ? ElementSize * ArrayLength :
             IsPointer ? 4 :
@@ -49,6 +52,7 @@ namespace CInterpreterWpf
         public int Size { get; set; }
         public string Label { get; set; }
         public bool IsStringLiteral { get; set; }
+        public MemoryRegionKind Kind { get; set; }
 
         public MemoryRegionInfo Clone()
         {
@@ -57,7 +61,8 @@ namespace CInterpreterWpf
                 Address = Address,
                 Size = Size,
                 Label = Label,
-                IsStringLiteral = IsStringLiteral
+                IsStringLiteral = IsStringLiteral,
+                Kind = Kind
             };
         }
     }
@@ -205,236 +210,46 @@ namespace CInterpreterWpf
             throw new Exception($"Execution Error: struct '{structName}' has no member '{memberName}'");
         }
 
-        private void ZeroMemory(int addr, int size)
+        private int GetStructMemberAddress(StructMemberAccessNode access)
         {
-            EnsureMemoryRange(addr, size);
-            Array.Clear(Memory, addr, size);
-        }
-
-        private void InitializeStruct(VarInfo info, IASTNode initializer)
-        {
-            if (initializer == null)
-                return;
-
-            if (initializer is not StructInitializerNode structInit)
-                throw new Exception("Execution Error: invalid struct initializer");
-
-            if (!_structs.TryGetValue(info.StructName, out var sd))
-                throw new Exception($"Execution Error: struct '{info.StructName}' not found");
-
-            if (structInit.Elements.Count > sd.Fields.Count)
-                throw new Exception($"Execution Error: too many initializer elements for struct '{info.StructName}'");
-
-            int offset = 0;
-            for (int i = 0; i < sd.Fields.Count; i++)
-            {
-                var field = sd.Fields[i];
-                int fieldAddr = info.Address + offset;
-
-                if (i < structInit.Elements.Count)
-                {
-                    var elem = structInit.Elements[i];
-
-                    if (field.IsStruct && !field.IsPointer)
-                    {
-                        var nestedInfo = new VarInfo
-                        {
-                            Address = fieldAddr,
-                            Type = "struct",
-                            IsPointer = false,
-                            IsArray = false,
-                            ArrayLength = 0,
-                            IsStruct = true,
-                            StructName = field.StructName,
-                            StructSize = GetStructSize(field.StructName)
-                        };
-
-                        InitializeStruct(nestedInfo, elem);
-                    }
-                    else
-                    {
-                        int value = Convert.ToInt32(EvaluateExpression(elem));
-                        WriteScalarAtAddress(field.Type, field.IsPointer, fieldAddr, value);
-                    }
-                }
-
-                offset += GetStructFieldSize(field);
-            }
-        }
-
-        private bool TryGetStructValueInfo(IASTNode expr, out string structName, out int address)
-        {
-            if (expr is VariableNode v)
+            if (access.Target is VariableNode v)
             {
                 if (!Env.TryGetValue(v.Name, out var info))
                     throw new Exception($"Execution Error: variable '{v.Name}' not found");
 
-                if (info.IsArray && info.IsStruct)
-                {
-                    structName = info.StructName;
-                    address = info.Address;
-                    return true;
-                }
+                if (!info.IsStruct || info.IsPointer)
+                    throw new Exception($"Execution Error: '{v.Name}' is not a struct value");
 
-                if (info.IsStruct && !info.IsPointer)
-                {
-                    structName = info.StructName;
-                    address = info.Address;
-                    return true;
-                }
-
-                structName = null;
-                address = 0;
-                return false;
+                var fieldInfo = GetStructFieldInfo(info.StructName, access.MemberName);
+                return info.Address + fieldInfo.offset;
             }
 
-            if (expr is ArrayAccessNode aa)
-            {
-                if (TryGetArrayAccessStructType(aa, out structName))
-                {
-                    address = GetIndexedAddress(aa);
-                    return true;
-                }
-
-                structName = null;
-                address = 0;
-                return false;
-            }
-
-            if (expr is StructMemberAccessNode sm)
-            {
-                if (!TryGetStructValueInfo(sm.Target, out string baseStructName, out int baseAddr))
-                {
-                    structName = null;
-                    address = 0;
-                    return false;
-                }
-
-                var fieldInfo = GetStructFieldInfo(baseStructName, sm.MemberName);
-                if (!fieldInfo.field.IsStruct || fieldInfo.field.IsPointer)
-                {
-                    structName = null;
-                    address = 0;
-                    return false;
-                }
-
-                structName = fieldInfo.field.StructName;
-                address = baseAddr + fieldInfo.offset;
-                return true;
-            }
-
-            if (expr is StructPointerMemberAccessNode spm)
-            {
-                if (!TryGetStructPointerType(spm.Target, out string baseStructName))
-                {
-                    structName = null;
-                    address = 0;
-                    return false;
-                }
-
-                int baseAddr = Convert.ToInt32(EvaluateExpression(spm.Target));
-                var fieldInfo = GetStructFieldInfo(baseStructName, spm.MemberName);
-                if (!fieldInfo.field.IsStruct || fieldInfo.field.IsPointer)
-                {
-                    structName = null;
-                    address = 0;
-                    return false;
-                }
-
-                structName = fieldInfo.field.StructName;
-                address = baseAddr + fieldInfo.offset;
-                return true;
-            }
-
-            structName = null;
-            address = 0;
-            return false;
-        }
-
-        private bool TryGetStructPointerType(IASTNode expr, out string structName)
-        {
-            if (expr is VariableNode v &&
-                Env.TryGetValue(v.Name, out var info) &&
-                info.IsStruct && info.IsPointer)
-            {
-                structName = info.StructName;
-                return true;
-            }
-
-            if (expr is FunctionCallNode call &&
-                _functions.TryGetValue(call.FunctionName, out var fn) &&
-                fn.ReturnIsStruct && fn.ReturnIsPointer)
-            {
-                structName = fn.ReturnStructName;
-                return true;
-            }
-
-            if (expr is BinaryOpNode b && (b.Operator == "+" || b.Operator == "-"))
-            {
-                if (TryGetStructPointerType(b.Left, out structName))
-                    return true;
-
-                if (TryGetStructPointerType(b.Right, out structName))
-                    return true;
-            }
-
-            if (expr is UnaryOpNode u && u.Operator == "&")
-            {
-                if (TryGetStructValueInfo(u.Target, out structName, out _))
-                    return true;
-            }
-
-            structName = null;
-            return false;
-        }
-
-        private bool TryGetArrayAccessStructType(ArrayAccessNode access, out string structName)
-        {
-            if (access.Target is VariableNode v &&
-                Env.TryGetValue(v.Name, out var info))
-            {
-                if (info.IsArray && info.IsStruct)
-                {
-                    structName = info.StructName;
-                    return true;
-                }
-            }
-
-            if (TryGetStructPointerType(access.Target, out structName))
-                return true;
-
-            structName = null;
-            return false;
-        }
-
-        private int GetStructMemberAddress(StructMemberAccessNode access)
-        {
-            if (!TryGetStructValueInfo(access.Target, out string baseStructName, out int baseAddr))
-                throw new Exception("Execution Error: left side of '.' is not a struct");
-
-            var fieldInfo = GetStructFieldInfo(baseStructName, access.MemberName);
-            return baseAddr + fieldInfo.offset;
+            throw new Exception("Execution Error: nested struct member access is not supported yet");
         }
 
         private int GetStructPointerMemberAddress(StructPointerMemberAccessNode access)
         {
-            if (!TryGetStructPointerType(access.Target, out string structName))
-                throw new Exception("Execution Error: left side of '->' is not a pointer to struct");
+            string structName = null;
+            int baseAddr;
 
-            int baseAddr = Convert.ToInt32(EvaluateExpression(access.Target));
+            if (access.Target is VariableNode v)
+            {
+                if (!Env.TryGetValue(v.Name, out var info))
+                    throw new Exception($"Execution Error: variable '{v.Name}' not found");
+
+                if (!info.IsStruct || !info.IsPointer)
+                    throw new Exception($"Execution Error: '{v.Name}' is not a pointer to struct");
+
+                structName = info.StructName;
+                baseAddr = ReadScalarAtAddress(info.Type, true, info.Address);
+            }
+            else
+            {
+                throw new Exception("Execution Error: complex pointer member access is not supported yet");
+            }
+
             var fieldInfo = GetStructFieldInfo(structName, access.MemberName);
             return baseAddr + fieldInfo.offset;
-        }
-
-        private int GetPointeeElementSize(IASTNode expr)
-        {
-            if (TryGetStructPointerType(expr, out string structName))
-                return GetStructSize(structName);
-
-            if (TryGetPointeeType(expr, out string type, out bool isPointer))
-                return GetTypeElementSize(type, isPointer);
-
-            return 4;
         }
 
         private int CallUserFunction(FunctionCallNode call)
@@ -479,7 +294,7 @@ namespace CInterpreterWpf
                         StructSize = param.IsStruct && !param.IsPointer ? GetStructSize(param.StructName) : 0
                     };
 
-                    int addr = AllocateStackRegion(info.Size, param.Name);
+                    int addr = AllocateStackRegion(info.Size, param.Name, MemoryRegionKind.Local);
                     info.Address = addr;
                     BindVariable(param.Name, info);
 
@@ -587,7 +402,7 @@ namespace CInterpreterWpf
                 Regions.RemoveRange(frame.SavedRegionCount, Regions.Count - frame.SavedRegionCount);
         }
 
-        private int AllocateStackRegion(int size, string label)
+        private int AllocateStackRegion(int size, string label, MemoryRegionKind kind = MemoryRegionKind.Local)
         {
             EnsureSpaceForStackAllocation(size);
 
@@ -598,7 +413,8 @@ namespace CInterpreterWpf
                 Address = addr,
                 Size = size,
                 Label = label,
-                IsStringLiteral = false
+                IsStringLiteral = false,
+                Kind = kind
             });
 
             _stackPtr += size;
@@ -621,7 +437,8 @@ namespace CInterpreterWpf
                 Address = _literalPtr,
                 Size = size,
                 Label = label,
-                IsStringLiteral = true
+                IsStringLiteral = true,
+                Kind = MemoryRegionKind.Literal
             });
 
             return _literalPtr;
@@ -735,9 +552,11 @@ namespace CInterpreterWpf
         {
             if (expr is StructMemberAccessNode member)
             {
-                if (TryGetStructValueInfo(member.Target, out string baseStructName, out _))
+                if (member.Target is VariableNode mv &&
+                    Env.TryGetValue(mv.Name, out var baseInfo) &&
+                    baseInfo.IsStruct && !baseInfo.IsPointer)
                 {
-                    var field = GetStructFieldInfo(baseStructName, member.MemberName).field;
+                    var field = GetStructFieldInfo(baseInfo.StructName, member.MemberName).field;
                     type = field.Type;
                     isPointer = field.IsPointer;
                     return true;
@@ -746,9 +565,11 @@ namespace CInterpreterWpf
 
             if (expr is StructPointerMemberAccessNode pointerMember)
             {
-                if (TryGetStructPointerType(pointerMember.Target, out string structName))
+                if (pointerMember.Target is VariableNode pv &&
+                    Env.TryGetValue(pv.Name, out var baseInfo) &&
+                    baseInfo.IsStruct && baseInfo.IsPointer)
                 {
-                    var field = GetStructFieldInfo(structName, pointerMember.MemberName).field;
+                    var field = GetStructFieldInfo(baseInfo.StructName, pointerMember.MemberName).field;
                     type = field.Type;
                     isPointer = field.IsPointer;
                     return true;
@@ -770,14 +591,6 @@ namespace CInterpreterWpf
                     isPointer = false;
                     return true;
                 }
-            }
-
-            if (expr is FunctionCallNode call &&
-                _functions.TryGetValue(call.FunctionName, out var fn))
-            {
-                type = fn.ReturnType;
-                isPointer = fn.ReturnIsPointer;
-                return true;
             }
 
             if (expr is StringNode)
@@ -811,21 +624,23 @@ namespace CInterpreterWpf
                     return true;
                 }
 
-                if (u.Target is StructMemberAccessNode memberTarget)
+                if (u.Target is StructMemberAccessNode memberTarget &&
+                    memberTarget.Target is VariableNode smv &&
+                    Env.TryGetValue(smv.Name, out var structVar) &&
+                    structVar.IsStruct)
                 {
-                    if (TryGetStructValueInfo(memberTarget.Target, out string baseStructName, out _))
-                    {
-                        var field = GetStructFieldInfo(baseStructName, memberTarget.MemberName).field;
-                        type = field.Type;
-                        isPointer = field.IsPointer;
-                        return true;
-                    }
+                    var field = GetStructFieldInfo(structVar.StructName, memberTarget.MemberName).field;
+                    type = field.Type;
+                    isPointer = field.IsPointer;
+                    return true;
                 }
 
                 if (u.Target is StructPointerMemberAccessNode ptrMemberTarget &&
-                    TryGetStructPointerType(ptrMemberTarget.Target, out string ptrStructName))
+                    ptrMemberTarget.Target is VariableNode pmv &&
+                    Env.TryGetValue(pmv.Name, out var ptrStructVar) &&
+                    ptrStructVar.IsStruct && ptrStructVar.IsPointer)
                 {
-                    var field = GetStructFieldInfo(ptrStructName, ptrMemberTarget.MemberName).field;
+                    var field = GetStructFieldInfo(ptrStructVar.StructName, ptrMemberTarget.MemberName).field;
                     type = field.Type;
                     isPointer = field.IsPointer;
                     return true;
@@ -855,7 +670,10 @@ namespace CInterpreterWpf
                 return baseInfo.Address + index * baseInfo.ElementSize;
             }
 
-            int elementSize = GetPointeeElementSize(access.Target);
+            int elementSize = TryGetPointeeType(access.Target, out string t, out bool p)
+                ? GetTypeElementSize(t, p)
+                : 4;
+
             return baseAddr + index * elementSize;
         }
 
@@ -865,11 +683,11 @@ namespace CInterpreterWpf
             {
                 var info = Env[varNode.Name];
 
-                if (info.IsArray)
-                    return info.Address;
-
                 if (info.IsStruct && !info.IsPointer)
                     throw new Exception($"Execution Error: struct variable '{varNode.Name}' cannot be used as scalar value");
+
+                if (info.IsArray)
+                    return info.Address;
 
                 return ReadScalarAtAddress(info.Type, info.IsPointer, info.Address);
             }
@@ -878,11 +696,11 @@ namespace CInterpreterWpf
             {
                 int addr = GetStructMemberAddress(memberAccess);
 
-                if (TryGetStructValueInfo(memberAccess.Target, out string baseStructName, out _))
+                if (memberAccess.Target is VariableNode mv &&
+                    Env.TryGetValue(mv.Name, out var structInfo) &&
+                    structInfo.IsStruct)
                 {
-                    var field = GetStructFieldInfo(baseStructName, memberAccess.MemberName).field;
-                    if (field.IsStruct && !field.IsPointer)
-                        return addr;
+                    var field = GetStructFieldInfo(structInfo.StructName, memberAccess.MemberName).field;
                     return ReadScalarAtAddress(field.Type, field.IsPointer, addr);
                 }
 
@@ -893,11 +711,11 @@ namespace CInterpreterWpf
             {
                 int addr = GetStructPointerMemberAddress(pointerMemberAccess);
 
-                if (TryGetStructPointerType(pointerMemberAccess.Target, out string structName))
+                if (pointerMemberAccess.Target is VariableNode pv &&
+                    Env.TryGetValue(pv.Name, out var structPtrInfo) &&
+                    structPtrInfo.IsStruct && structPtrInfo.IsPointer)
                 {
-                    var field = GetStructFieldInfo(structName, pointerMemberAccess.MemberName).field;
-                    if (field.IsStruct && !field.IsPointer)
-                        return addr;
+                    var field = GetStructFieldInfo(structPtrInfo.StructName, pointerMemberAccess.MemberName).field;
                     return ReadScalarAtAddress(field.Type, field.IsPointer, addr);
                 }
 
@@ -907,9 +725,6 @@ namespace CInterpreterWpf
             if (target is ArrayAccessNode arrayAccess)
             {
                 int addr = GetIndexedAddress(arrayAccess);
-
-                if (TryGetArrayAccessStructType(arrayAccess, out _))
-                    return addr;
 
                 if (TryGetPointeeType(arrayAccess.Target, out string elementType, out bool elementIsPointer))
                     return ReadScalarAtAddress(elementType, elementIsPointer, addr);
@@ -950,11 +765,11 @@ namespace CInterpreterWpf
             {
                 int addr = GetStructMemberAddress(memberAccess);
 
-                if (TryGetStructValueInfo(memberAccess.Target, out string baseStructName, out _))
+                if (memberAccess.Target is VariableNode mv &&
+                    Env.TryGetValue(mv.Name, out var structInfo) &&
+                    structInfo.IsStruct)
                 {
-                    var field = GetStructFieldInfo(baseStructName, memberAccess.MemberName).field;
-                    if (field.IsStruct && !field.IsPointer)
-                        throw new Exception("Execution Error: cannot assign to struct field as scalar directly");
+                    var field = GetStructFieldInfo(structInfo.StructName, memberAccess.MemberName).field;
                     WriteScalarAtAddress(field.Type, field.IsPointer, addr, value);
                     return;
                 }
@@ -966,11 +781,11 @@ namespace CInterpreterWpf
             {
                 int addr = GetStructPointerMemberAddress(pointerMemberAccess);
 
-                if (TryGetStructPointerType(pointerMemberAccess.Target, out string structName))
+                if (pointerMemberAccess.Target is VariableNode pv &&
+                    Env.TryGetValue(pv.Name, out var structPtrInfo) &&
+                    structPtrInfo.IsStruct && structPtrInfo.IsPointer)
                 {
-                    var field = GetStructFieldInfo(structName, pointerMemberAccess.MemberName).field;
-                    if (field.IsStruct && !field.IsPointer)
-                        throw new Exception("Execution Error: cannot assign to struct field as scalar directly");
+                    var field = GetStructFieldInfo(structPtrInfo.StructName, pointerMemberAccess.MemberName).field;
                     WriteScalarAtAddress(field.Type, field.IsPointer, addr, value);
                     return;
                 }
@@ -1147,25 +962,25 @@ namespace CInterpreterWpf
                     ArrayLength = resolvedArrayLength,
                     IsStruct = v.IsStruct,
                     StructName = v.StructName,
-                    StructSize = v.IsStruct ? GetStructSize(v.StructName) : 0
+                    StructSize = v.IsStruct && !v.IsPointer ? GetStructSize(v.StructName) : 0
                 };
 
                 if (info.IsArray && info.ArrayLength <= 0)
                     throw new Exception($"Execution Error: invalid array length for '{v.VarName}'");
 
-                int addr = AllocateStackRegion(info.Size, v.VarName);
+                int addr = AllocateStackRegion(info.Size, v.VarName, MemoryRegionKind.Local);
                 info.Address = addr;
                 BindVariable(v.VarName, info);
-                ZeroMemory(info.Address, info.Size);
 
                 if (v.IsStruct && !v.IsPointer)
                 {
                     if (v.Initializer != null)
-                        InitializeStruct(info, v.Initializer);
+                        throw new Exception("Struct initializer is not supported yet");
                 }
                 else if (v.IsArray)
                 {
-                    InitializeArray(info, v.Initializer);
+                    if (v.Initializer != null)
+                        throw new Exception("Struct array initializer is not supported yet");
                 }
                 else
                 {
@@ -1381,7 +1196,10 @@ namespace CInterpreterWpf
                     if (u.Target is VariableNode vt)
                         return Env[vt.Name].Address;
 
-                    if (u.Target is StructMemberAccessNode memberTarget)
+                    if (u.Target is StructMemberAccessNode memberTarget &&
+                        memberTarget.Target is VariableNode memberVar &&
+                        Env.TryGetValue(memberVar.Name, out var svi) &&
+                        svi.IsStruct)
                         return GetStructMemberAddress(memberTarget);
 
                     if (u.Target is StructPointerMemberAccessNode pointerMemberTarget)
@@ -1434,11 +1252,10 @@ namespace CInterpreterWpf
                 int left = Convert.ToInt32(EvaluateExpression(b.Left));
                 int right = Convert.ToInt32(EvaluateExpression(b.Right));
 
-                if (b.Operator == "+" || b.Operator == "-")
+                if ((b.Operator == "+" || b.Operator == "-") &&
+                    TryGetPointeeType(b.Left, out string leftType, out bool leftIsPointer))
                 {
-                    int elementSize = GetPointeeElementSize(b.Left);
-                    if (elementSize != 4 || TryGetPointeeType(b.Left, out _, out _))
-                        right *= elementSize;
+                    right *= GetTypeElementSize(leftType, leftIsPointer);
                 }
 
                 return b.Operator switch

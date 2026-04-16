@@ -36,14 +36,78 @@ namespace CInterpreterWpf
         public ProgramNode Parse()
         {
             var p = new ProgramNode();
+
             while (CurrentToken.Type != TokenType.EOF)
             {
-                if (CurrentToken.Type == TokenType.Struct && PeekToken().Type == TokenType.Identifier && PeekToken(2).Type == TokenType.LBrace)
+                if (CurrentToken.Type == TokenType.Struct &&
+                    PeekToken().Type == TokenType.Identifier &&
+                    PeekToken(2).Type == TokenType.LBrace)
+                {
                     p.Declarations.Add(ParseStructDeclaration());
+                }
+                else if (IsTopLevelVariableDeclaration())
+                {
+                    if (CurrentToken.Type == TokenType.Struct)
+                        p.Declarations.Add(ParseStructVariableDeclaration(true));
+                    else
+                        p.Declarations.Add(ParseVariableDeclaration(true));
+                }
                 else
+                {
                     p.Declarations.Add(ParseFunctionDeclaration());
+                }
             }
+
             return p;
+        }
+
+        private bool IsTopLevelVariableDeclaration()
+        {
+            int saved = _position;
+            try
+            {
+                if (CurrentToken.Type == TokenType.Struct)
+                {
+                    Consume();
+                    Expect(TokenType.Identifier);
+
+                    if (CurrentToken.Type == TokenType.Asterisk)
+                        Consume();
+
+                    Expect(TokenType.Identifier);
+
+                    if (CurrentToken.Type == TokenType.LParen)
+                        return false;
+
+                    return true;
+                }
+
+                if (CurrentToken.Type == TokenType.Int ||
+                    CurrentToken.Type == TokenType.Char)
+                {
+                    Consume();
+
+                    if (CurrentToken.Type == TokenType.Asterisk)
+                        Consume();
+
+                    Expect(TokenType.Identifier);
+
+                    if (CurrentToken.Type == TokenType.LParen)
+                        return false;
+
+                    return true;
+                }
+
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                _position = saved;
+            }
         }
 
         private StructDeclNode ParseStructDeclaration()
@@ -288,11 +352,7 @@ namespace CInterpreterWpf
                 if (CurrentToken.Type == TokenType.Assign)
                 {
                     Consume();
-
-                    if (CurrentToken.Type == TokenType.LBrace)
-                        throw new Exception("Struct array initializer is not supported yet");
-
-                    throw new Exception("Struct array initializer must be {...}");
+                    throw new Exception("Struct array initializer is not supported yet");
                 }
 
                 if (v.IsArrayLengthInferred)
@@ -467,9 +527,9 @@ namespace CInterpreterWpf
                     throw new Exception("Array length may be omitted only when initializer is provided");
                 }
             }
-            else
+            else if (CurrentToken.Type == TokenType.Assign)
             {
-                Expect(TokenType.Assign);
+                Consume();
                 v.Initializer = ParseExpression();
             }
 
