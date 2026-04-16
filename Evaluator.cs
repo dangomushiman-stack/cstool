@@ -690,13 +690,16 @@ namespace CInterpreterWpf
             if (_stringLiteralPool.TryGetValue(value, out int existingAddr))
                 return existingAddr;
 
-            int size = value.Length + 1;
+            // C#の文字列をUTF-8のバイト配列に変換
+            byte[] utf8Bytes = Encoding.UTF8.GetBytes(value);
+            int size = utf8Bytes.Length + 1; // null終端文字(+1)
             int addr = AllocateLiteralRegion(size, $"string literal \"{value}\"");
 
-            for (int i = 0; i < value.Length; i++)
-                WriteByte(addr + i, value[i]);
+            // UTF-8のバイト列をメモリに書き込む
+            for (int i = 0; i < utf8Bytes.Length; i++)
+                WriteByte(addr + i, utf8Bytes[i]);
 
-            WriteByte(addr + value.Length, 0);
+            WriteByte(addr + utf8Bytes.Length, 0); // null終端
             _stringLiteralPool[value] = addr;
 
             CaptureSnapshot($"String literal allocated: \"{value}\"");
@@ -705,21 +708,20 @@ namespace CInterpreterWpf
 
         private string ReadCString(int addr)
         {
-            EnsureMemoryRange(addr, 1);
-
-            var sb = new StringBuilder();
+            var bytes = new List<byte>();
             int current = addr;
 
             while (true)
             {
                 EnsureMemoryRange(current, 1);
                 byte b = Memory[current];
-                if (b == 0) break;
-                sb.Append((char)b);
+                if (b == 0) break; // null終端で終了
+                bytes.Add(b);
                 current++;
             }
 
-            return sb.ToString();
+            // メモリ上のUTF-8バイト配列をC#の文字列に復元
+            return Encoding.UTF8.GetString(bytes.ToArray());
         }
 
         private void CopyBytes(int srcAddr, int dstAddr, int count)
