@@ -36,6 +36,12 @@ int counter()
 int main() {
     Point pts[2];
     Point *p;
+    int **a;
+    int  *b;
+    int  c=50;
+    b = &c;
+    a = &b;
+    printf("**a = %d\n",**a);
     
 
     p = pts;

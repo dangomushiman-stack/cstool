@@ -186,11 +186,7 @@ namespace CInterpreterWpf
                     string varName = variableEntry.Key;
                     VarInfo info = variableEntry.Value;
 
-                    typeStr = info.IsArray
-                        ? $"{info.Type}[{info.ArrayLength}]"
-                        : info.IsPointer
-                            ? info.Type + "*"
-                            : info.Type;
+                    typeStr = info.TypeInfo.ToDisplayString();
 
                     nameStr = varName;
 
@@ -303,7 +299,7 @@ namespace CInterpreterWpf
                             else
                             {
                                 note = addr == info.Address
-                                    ? $"{varName} ({(info.IsPointer ? info.Type + "*" : info.Type)}) start"
+                                    ? $"{varName} ({info.TypeInfo.ToDisplayString()}) start"
                                     : $"{varName} +{addr - info.Address}";
                             }
                         }

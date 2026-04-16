@@ -8,12 +8,14 @@ namespace CInterpreterWpf
     public class VarInfo
     {
         public int Address { get; set; }
-        public string Type { get; set; }
-        public bool IsPointer { get; set; }
-        public bool IsArray { get; set; }
-        public int ArrayLength { get; set; }
-        public bool IsStruct { get; set; }
-        public string StructName { get; set; }
+        public CTypeInfo TypeInfo { get; } = new CTypeInfo();
+        public string Type { get => TypeInfo.Type; set => TypeInfo.Type = value; }
+        public bool IsPointer { get => TypeInfo.IsPointer; set => TypeInfo.IsPointer = value; }
+        public int PointerLevel { get => TypeInfo.PointerLevel; set => TypeInfo.PointerLevel = value; }
+        public bool IsArray { get => TypeInfo.IsArray; set => TypeInfo.IsArray = value; }
+        public int ArrayLength { get => TypeInfo.ArrayLength; set => TypeInfo.ArrayLength = value; }
+        public bool IsStruct { get => TypeInfo.IsStruct; set => TypeInfo.IsStruct = value; }
+        public string StructName { get => TypeInfo.StructName; set => TypeInfo.StructName = value; }
         public int StructSize { get; set; }
 
         public int ElementSize =>
@@ -32,17 +34,13 @@ namespace CInterpreterWpf
 
         public VarInfo Clone()
         {
-            return new VarInfo
+            var clone = new VarInfo
             {
                 Address = Address,
-                Type = Type,
-                IsPointer = IsPointer,
-                IsArray = IsArray,
-                ArrayLength = ArrayLength,
-                IsStruct = IsStruct,
-                StructName = StructName,
                 StructSize = StructSize
             };
+            clone.TypeInfo.CopyFrom(TypeInfo);
+            return clone;
         }
     }
 
@@ -112,6 +110,41 @@ namespace CInterpreterWpf
         public Evaluator(Action<string> stdout)
         {
             _stdout = stdout;
+        }
+
+        private static void CopyTypeInfo(CTypeInfo destination, CTypeInfo source)
+        {
+            if (destination == null || source == null)
+                return;
+
+            destination.CopyFrom(source);
+        }
+
+        private static VarInfo CreateVarInfoFromDeclaration(VarDeclNode declaration, int address, int arrayLength, int structSize)
+        {
+            var info = new VarInfo
+            {
+                Address = address,
+                StructSize = structSize
+            };
+
+            CopyTypeInfo(info.TypeInfo, declaration?.TypeInfo);
+            info.ArrayLength = arrayLength;
+            return info;
+        }
+
+        private static VarInfo CreateVarInfoFromParameter(FunctionParameter parameter, int address, int structSize)
+        {
+            var info = new VarInfo
+            {
+                Address = address,
+                StructSize = structSize
+            };
+
+            CopyTypeInfo(info.TypeInfo, parameter?.TypeInfo);
+            info.IsArray = false;
+            info.ArrayLength = 0;
+            return info;
         }
 
         public void Evaluate(ProgramNode program)
@@ -189,17 +222,11 @@ namespace CInterpreterWpf
                 ? (v.IsArrayLengthInferred ? GetInitializerArrayLength(v) : v.ArrayLength)
                 : v.ArrayLength;
 
-            var info = new VarInfo
-            {
-                Address = _stackPtr,
-                Type = v.Type,
-                IsPointer = v.IsPointer,
-                IsArray = v.IsArray,
-                ArrayLength = resolvedArrayLength,
-                IsStruct = v.IsStruct,
-                StructName = v.StructName,
-                StructSize = v.IsStruct ? GetStructSize(v.StructName) : 0
-            };
+            var info = CreateVarInfoFromDeclaration(
+                v,
+                _stackPtr,
+                resolvedArrayLength,
+                v.IsStruct ? GetStructSize(v.StructName) : 0);
 
             if (info.IsArray && info.ArrayLength <= 0)
                 throw new Exception($"Execution Error: invalid array length for '{v.VarName}'");
@@ -298,14 +325,14 @@ namespace CInterpreterWpf
                         var nestedInfo = new VarInfo
                         {
                             Address = fieldAddr,
-                            Type = "struct",
-                            IsPointer = false,
-                            IsArray = false,
-                            ArrayLength = 0,
-                            IsStruct = true,
-                            StructName = field.StructName,
                             StructSize = GetStructSize(field.StructName)
                         };
+                        nestedInfo.TypeInfo.Type = "struct";
+                        nestedInfo.TypeInfo.IsPointer = false;
+                        nestedInfo.TypeInfo.IsArray = false;
+                        nestedInfo.TypeInfo.ArrayLength = 0;
+                        nestedInfo.TypeInfo.IsStruct = true;
+                        nestedInfo.TypeInfo.StructName = field.StructName;
 
                         InitializeStruct(nestedInfo, elem);
                     }
@@ -413,7 +440,7 @@ namespace CInterpreterWpf
         {
             if (expr is VariableNode v &&
                 Env.TryGetValue(v.Name, out var info) &&
-                info.IsStruct && info.IsPointer)
+                info.IsStruct && info.PointerLevel == 1)
             {
                 structName = info.StructName;
                 return true;
@@ -421,7 +448,7 @@ namespace CInterpreterWpf
 
             if (expr is FunctionCallNode call &&
                 _functions.TryGetValue(call.FunctionName, out var fn) &&
-                fn.ReturnIsStruct && fn.ReturnIsPointer)
+                fn.ReturnIsStruct && fn.ReturnPointerLevel == 1)
             {
                 structName = fn.ReturnStructName;
                 return true;
@@ -440,6 +467,25 @@ namespace CInterpreterWpf
             {
                 if (TryGetStructValueInfo(u.Target, out structName, out _))
                     return true;
+            }
+
+            if (expr is UnaryOpNode deref && deref.Operator == "*")
+            {
+                if (deref.Target is VariableNode dv &&
+                    Env.TryGetValue(dv.Name, out var derefInfo) &&
+                    derefInfo.IsStruct && derefInfo.PointerLevel == 2)
+                {
+                    structName = derefInfo.StructName;
+                    return true;
+                }
+
+                if (deref.Target is FunctionCallNode dcall &&
+                    _functions.TryGetValue(dcall.FunctionName, out var dfn) &&
+                    dfn.ReturnIsStruct && dfn.ReturnPointerLevel == 2)
+                {
+                    structName = dfn.ReturnStructName;
+                    return true;
+                }
             }
 
             structName = null;
@@ -489,8 +535,8 @@ namespace CInterpreterWpf
             if (TryGetStructPointerType(expr, out string structName))
                 return GetStructSize(structName);
 
-            if (TryGetPointeeType(expr, out string type, out bool isPointer))
-                return GetTypeElementSize(type, isPointer);
+            if (TryGetPointeeType(expr, out string type, out int pointerLevel))
+                return GetTypeElementSize(type, pointerLevel > 0);
 
             return 4;
         }
@@ -525,17 +571,10 @@ namespace CInterpreterWpf
                 for (int i = 0; i < fn.Parameters.Count; i++)
                 {
                     var param = fn.Parameters[i];
-                    var info = new VarInfo
-                    {
-                        Address = _stackPtr,
-                        Type = param.Type,
-                        IsPointer = param.IsPointer,
-                        IsArray = false,
-                        ArrayLength = 0,
-                        IsStruct = param.IsStruct,
-                        StructName = param.StructName,
-                        StructSize = param.IsStruct && !param.IsPointer ? GetStructSize(param.StructName) : 0
-                    };
+                    var info = CreateVarInfoFromParameter(
+                        param,
+                        _stackPtr,
+                        param.IsStruct && !param.IsPointer ? GetStructSize(param.StructName) : 0);
 
                     int addr = AllocateStackRegion(info.Size, param.Name);
                     info.Address = addr;
@@ -800,13 +839,25 @@ namespace CInterpreterWpf
 
         private bool TryGetPointeeType(IASTNode expr, out string type, out bool isPointer)
         {
+            if (TryGetPointeeType(expr, out type, out int pointerLevel))
+            {
+                isPointer = pointerLevel > 0;
+                return true;
+            }
+
+            isPointer = false;
+            return false;
+        }
+
+        private bool TryGetPointeeType(IASTNode expr, out string type, out int pointerLevel)
+        {
             if (expr is StructMemberAccessNode member)
             {
                 if (TryGetStructValueInfo(member.Target, out string baseStructName, out _))
                 {
                     var field = GetStructFieldInfo(baseStructName, member.MemberName).field;
                     type = field.Type;
-                    isPointer = field.IsPointer;
+                    pointerLevel = Math.Max(0, field.PointerLevel - 1);
                     return true;
                 }
             }
@@ -817,7 +868,7 @@ namespace CInterpreterWpf
                 {
                     var field = GetStructFieldInfo(structName, pointerMember.MemberName).field;
                     type = field.Type;
-                    isPointer = field.IsPointer;
+                    pointerLevel = Math.Max(0, field.PointerLevel - 1);
                     return true;
                 }
             }
@@ -827,45 +878,46 @@ namespace CInterpreterWpf
                 if (varInfo.IsArray)
                 {
                     type = varInfo.Type;
-                    isPointer = false;
+                    pointerLevel = Math.Max(0, varInfo.PointerLevel - 1);
                     return true;
                 }
 
                 if (varInfo.IsPointer)
                 {
                     type = varInfo.Type;
-                    isPointer = false;
+                    pointerLevel = Math.Max(0, varInfo.PointerLevel - 1);
                     return true;
                 }
             }
 
             if (expr is FunctionCallNode call &&
-                _functions.TryGetValue(call.FunctionName, out var fn))
+                _functions.TryGetValue(call.FunctionName, out var fn) &&
+                fn.ReturnPointerLevel > 0)
             {
                 type = fn.ReturnType;
-                isPointer = fn.ReturnIsPointer;
+                pointerLevel = fn.ReturnPointerLevel - 1;
                 return true;
             }
 
             if (expr is StringNode)
             {
                 type = "char";
-                isPointer = false;
+                pointerLevel = 0;
                 return true;
             }
 
             if (expr is BinaryOpNode b && (b.Operator == "+" || b.Operator == "-"))
             {
-                if (TryGetPointeeType(b.Left, out type, out isPointer))
+                if (TryGetPointeeType(b.Left, out type, out pointerLevel))
                     return true;
 
-                if (TryGetPointeeType(b.Right, out type, out isPointer))
+                if (TryGetPointeeType(b.Right, out type, out pointerLevel))
                     return true;
             }
 
             if (expr is ArrayAccessNode access)
             {
-                if (TryGetPointeeType(access.Target, out type, out isPointer))
+                if (TryGetPointeeType(access.Target, out type, out pointerLevel))
                     return true;
             }
 
@@ -874,7 +926,7 @@ namespace CInterpreterWpf
                 if (u.Target is VariableNode vt && Env.TryGetValue(vt.Name, out var addrInfo))
                 {
                     type = addrInfo.Type;
-                    isPointer = addrInfo.IsPointer;
+                    pointerLevel = addrInfo.PointerLevel;
                     return true;
                 }
 
@@ -884,7 +936,7 @@ namespace CInterpreterWpf
                     {
                         var field = GetStructFieldInfo(baseStructName, memberTarget.MemberName).field;
                         type = field.Type;
-                        isPointer = field.IsPointer;
+                        pointerLevel = field.PointerLevel;
                         return true;
                     }
                 }
@@ -894,16 +946,16 @@ namespace CInterpreterWpf
                 {
                     var field = GetStructFieldInfo(ptrStructName, ptrMemberTarget.MemberName).field;
                     type = field.Type;
-                    isPointer = field.IsPointer;
+                    pointerLevel = field.PointerLevel;
                     return true;
                 }
 
-                if (u.Target is ArrayAccessNode aa && TryGetPointeeType(aa.Target, out type, out isPointer))
+                if (u.Target is ArrayAccessNode aa && TryGetPointeeType(aa.Target, out type, out pointerLevel))
                     return true;
             }
 
             type = null;
-            isPointer = false;
+            pointerLevel = 0;
             return false;
         }
 
@@ -978,8 +1030,8 @@ namespace CInterpreterWpf
                 if (TryGetArrayAccessStructType(arrayAccess, out _))
                     return addr;
 
-                if (TryGetPointeeType(arrayAccess.Target, out string elementType, out bool elementIsPointer))
-                    return ReadScalarAtAddress(elementType, elementIsPointer, addr);
+                if (TryGetPointeeType(arrayAccess.Target, out string elementType, out int elementPointerLevel))
+                    return ReadScalarAtAddress(elementType, elementPointerLevel > 0, addr);
 
                 return ReadInt(addr);
             }
@@ -988,8 +1040,11 @@ namespace CInterpreterWpf
             {
                 int addr = Convert.ToInt32(EvaluateExpression(unary.Target));
 
-                if (TryGetPointeeType(unary.Target, out string pointeeType, out bool pointeeIsPointer))
-                    return ReadScalarAtAddress(pointeeType, pointeeIsPointer, addr);
+                if (TryGetStructPointerType(unary.Target, out _))
+                    return addr;
+
+                if (TryGetPointeeType(unary.Target, out string pointeeType, out int pointeeLevel))
+                    return ReadScalarAtAddress(pointeeType, pointeeLevel > 0, addr);
 
                 return ReadInt(addr);
             }
@@ -1049,9 +1104,9 @@ namespace CInterpreterWpf
             {
                 int addr = GetIndexedAddress(arrayAccess);
 
-                if (TryGetPointeeType(arrayAccess.Target, out string elementType, out bool elementIsPointer))
+                if (TryGetPointeeType(arrayAccess.Target, out string elementType, out int elementPointerLevel))
                 {
-                    WriteScalarAtAddress(elementType, elementIsPointer, addr, value);
+                    WriteScalarAtAddress(elementType, elementPointerLevel > 0, addr, value);
                     return;
                 }
 
@@ -1063,9 +1118,12 @@ namespace CInterpreterWpf
             {
                 int addr = Convert.ToInt32(EvaluateExpression(unary.Target));
 
-                if (TryGetPointeeType(unary.Target, out string pointeeType, out bool pointeeIsPointer))
+                if (TryGetStructPointerType(unary.Target, out _))
+                    throw new Exception("Execution Error: cannot assign to struct value through '*' as scalar directly");
+
+                if (TryGetPointeeType(unary.Target, out string pointeeType, out int pointeeLevel))
                 {
-                    WriteScalarAtAddress(pointeeType, pointeeIsPointer, addr, value);
+                    WriteScalarAtAddress(pointeeType, pointeeLevel > 0, addr, value);
                     return;
                 }
 
@@ -1205,17 +1263,11 @@ namespace CInterpreterWpf
                     ? (v.IsArrayLengthInferred ? GetInitializerArrayLength(v) : v.ArrayLength)
                     : v.ArrayLength;
 
-                var info = new VarInfo
-                {
-                    Address = _stackPtr,
-                    Type = v.Type,
-                    IsPointer = v.IsPointer,
-                    IsArray = v.IsArray,
-                    ArrayLength = resolvedArrayLength,
-                    IsStruct = v.IsStruct,
-                    StructName = v.StructName,
-                    StructSize = v.IsStruct ? GetStructSize(v.StructName) : 0
-                };
+                var info = CreateVarInfoFromDeclaration(
+                    v,
+                    _stackPtr,
+                    resolvedArrayLength,
+                    v.IsStruct ? GetStructSize(v.StructName) : 0);
 
                 if (info.IsArray && info.ArrayLength <= 0)
                     throw new Exception($"Execution Error: invalid array length for '{v.VarName}'");
@@ -1504,7 +1556,8 @@ namespace CInterpreterWpf
                 if (b.Operator == "+" || b.Operator == "-")
                 {
                     int elementSize = GetPointeeElementSize(b.Left);
-                    if (elementSize != 4 || TryGetPointeeType(b.Left, out _, out _))
+                    int pointeeLevel;
+                    if (elementSize != 4 || TryGetPointeeType(b.Left, out _, out pointeeLevel))
                         right *= elementSize;
                 }
 

@@ -13,10 +13,12 @@ namespace CInterpreterWpf
 
         private class TypeInfo
         {
-            public string Type { get; set; }
-            public bool IsStruct { get; set; }
-            public string StructName { get; set; }
-            public bool IsPointer { get; set; }
+            public CTypeInfo TypeInfoValue { get; } = new CTypeInfo();
+            public string Type { get => TypeInfoValue.Type; set => TypeInfoValue.Type = value; }
+            public bool IsStruct { get => TypeInfoValue.IsStruct; set => TypeInfoValue.IsStruct = value; }
+            public string StructName { get => TypeInfoValue.StructName; set => TypeInfoValue.StructName = value; }
+            public bool IsPointer { get => TypeInfoValue.IsPointer; set => TypeInfoValue.IsPointer = value; }
+            public int PointerLevel { get => TypeInfoValue.PointerLevel; set => TypeInfoValue.PointerLevel = value; }
         }
 
         public Parser(List<Token> tokens)
@@ -50,6 +52,45 @@ namespace CInterpreterWpf
             return t == TokenType.Int || t == TokenType.Char || t == TokenType.Void ||
                    t == TokenType.Short || t == TokenType.Long || 
                    t == TokenType.Float || t == TokenType.Double;
+        }
+
+        private static void CopyTypeInfo(CTypeInfo destination, CTypeInfo source)
+        {
+            if (destination == null || source == null)
+                return;
+
+            destination.CopyFrom(source);
+        }
+
+        private static void ApplyTypeInfo(StructFieldDecl field, CTypeInfo typeInfo)
+        {
+            CopyTypeInfo(field?.TypeInfo, typeInfo);
+        }
+
+        private static void ApplyTypeInfo(FunctionParameter parameter, CTypeInfo typeInfo)
+        {
+            CopyTypeInfo(parameter?.TypeInfo, typeInfo);
+        }
+
+        private static void ApplyTypeInfo(VarDeclNode declaration, CTypeInfo typeInfo)
+        {
+            CopyTypeInfo(declaration?.TypeInfo, typeInfo);
+        }
+
+        private static void ApplyReturnTypeInfo(FunctionDeclNode function, CTypeInfo typeInfo)
+        {
+            CopyTypeInfo(function?.ReturnTypeInfo, typeInfo);
+        }
+
+        private int ConsumePointerDeclarators()
+        {
+            int level = 0;
+            while (CurrentToken.Type == TokenType.Asterisk)
+            {
+                Consume();
+                level++;
+            }
+            return level;
         }
 
         public ProgramNode Parse()
@@ -116,21 +157,14 @@ namespace CInterpreterWpf
             else if (CurrentToken.Type == TokenType.Identifier && _typedefs.TryGetValue(CurrentToken.Value, out var existing))
             {
                 Consume();
-                info.Type = existing.Type;
-                info.IsStruct = existing.IsStruct;
-                info.StructName = existing.StructName;
-                info.IsPointer = existing.IsPointer;
+                CopyTypeInfo(info.TypeInfoValue, existing.TypeInfoValue);
             }
             else
             {
                 throw new Exception($"Invalid typedef base type at line {CurrentToken.Line}, column {CurrentToken.Column}");
             }
 
-            if (CurrentToken.Type == TokenType.Asterisk)
-            {
-                Consume();
-                info.IsPointer = true;
-            }
+            info.PointerLevel += ConsumePointerDeclarators();
 
             string alias = Expect(TokenType.Identifier).Value;
             Expect(TokenType.Semicolon);
@@ -162,7 +196,7 @@ namespace CInterpreterWpf
                 {
                     Consume();
                     Expect(TokenType.Identifier);
-                    if (CurrentToken.Type == TokenType.Asterisk) Consume();
+                    ConsumePointerDeclarators();
                     Expect(TokenType.Identifier);
                     if (CurrentToken.Type == TokenType.LParen) return false;
                     return true;
@@ -171,7 +205,7 @@ namespace CInterpreterWpf
                 if (IsBasicType(CurrentToken.Type))
                 {
                     Consume();
-                    if (CurrentToken.Type == TokenType.Asterisk) Consume();
+                    ConsumePointerDeclarators();
                     Expect(TokenType.Identifier);
                     if (CurrentToken.Type == TokenType.LParen) return false;
                     return true;
@@ -180,7 +214,7 @@ namespace CInterpreterWpf
                 if (CurrentToken.Type == TokenType.Identifier && _typedefs.ContainsKey(CurrentToken.Value))
                 {
                     Consume();
-                    if (CurrentToken.Type == TokenType.Asterisk) Consume();
+                    ConsumePointerDeclarators();
                     Expect(TokenType.Identifier);
                     if (CurrentToken.Type == TokenType.LParen) return false;
                     return true;
@@ -233,21 +267,14 @@ namespace CInterpreterWpf
             else if (CurrentToken.Type == TokenType.Identifier && _typedefs.TryGetValue(CurrentToken.Value, out var td))
             {
                 Consume();
-                field.Type = td.Type;
-                field.IsStruct = td.IsStruct;
-                field.StructName = td.StructName;
-                field.IsPointer = td.IsPointer;
+                ApplyTypeInfo(field, td.TypeInfoValue);
             }
             else
             {
                 throw new Exception($"Struct field type error at line {CurrentToken.Line}, column {CurrentToken.Column}");
             }
 
-            if (CurrentToken.Type == TokenType.Asterisk)
-            {
-                Consume();
-                field.IsPointer = true;
-            }
+            field.PointerLevel += ConsumePointerDeclarators();
 
             field.Name = Expect(TokenType.Identifier).Value;
             Expect(TokenType.Semicolon);
@@ -272,21 +299,14 @@ namespace CInterpreterWpf
             else if (CurrentToken.Type == TokenType.Identifier && _typedefs.TryGetValue(CurrentToken.Value, out var td))
             {
                 Consume();
-                fn.ReturnType = td.Type;
-                fn.ReturnIsStruct = td.IsStruct;
-                fn.ReturnStructName = td.StructName;
-                fn.ReturnIsPointer = td.IsPointer;
+                ApplyReturnTypeInfo(fn, td.TypeInfoValue);
             }
             else
             {
                 throw new Exception($"Invalid function return type at line {CurrentToken.Line}, column {CurrentToken.Column}");
             }
 
-            if (CurrentToken.Type == TokenType.Asterisk)
-            {
-                Consume();
-                fn.ReturnIsPointer = true;
-            }
+            fn.ReturnPointerLevel += ConsumePointerDeclarators();
 
             if (fn.ReturnIsStruct && !fn.ReturnIsPointer)
                 throw new Exception("Struct return type is not supported yet");
@@ -340,21 +360,14 @@ namespace CInterpreterWpf
             else if (CurrentToken.Type == TokenType.Identifier && _typedefs.TryGetValue(CurrentToken.Value, out var td))
             {
                 Consume();
-                param.Type = td.Type;
-                param.IsStruct = td.IsStruct;
-                param.StructName = td.StructName;
-                param.IsPointer = td.IsPointer;
+                ApplyTypeInfo(param, td.TypeInfoValue);
             }
             else
             {
                 throw new Exception($"Parameter type error at line {CurrentToken.Line}");
             }
 
-            if (CurrentToken.Type == TokenType.Asterisk)
-            {
-                Consume();
-                param.IsPointer = true;
-            }
+            param.PointerLevel += ConsumePointerDeclarators();
 
             param.Name = Expect(TokenType.Identifier).Value;
             return param;
@@ -444,21 +457,14 @@ namespace CInterpreterWpf
             else if (CurrentToken.Type == TokenType.Identifier && _typedefs.TryGetValue(CurrentToken.Value, out var td))
             {
                 Consume();
-                v.Type = td.Type;
-                v.IsStruct = td.IsStruct;
-                v.StructName = td.StructName;
-                v.IsPointer = td.IsPointer;
+                ApplyTypeInfo(v, td.TypeInfoValue);
             }
             else
             {
                 throw new Exception($"Expected type at line {CurrentToken.Line}");
             }
 
-            if (CurrentToken.Type == TokenType.Asterisk)
-            {
-                Consume();
-                v.IsPointer = true;
-            }
+            v.PointerLevel += ConsumePointerDeclarators();
 
             v.VarName = Expect(TokenType.Identifier).Value;
 

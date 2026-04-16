@@ -1,8 +1,87 @@
+using System;
 using System.Collections.Generic;
 
 namespace CInterpreterWpf
 {
     public interface IASTNode { }
+
+    public class CTypeInfo
+    {
+        private int _pointerLevel;
+
+        public string Type { get; set; }
+
+        public int PointerLevel
+        {
+            get => _pointerLevel;
+            set
+            {
+                if (value < 0)
+                    throw new ArgumentOutOfRangeException(nameof(PointerLevel));
+
+                _pointerLevel = value;
+            }
+        }
+
+        public bool IsPointer
+        {
+            get => PointerLevel > 0;
+            set
+            {
+                if (!value)
+                {
+                    PointerLevel = 0;
+                }
+                else if (PointerLevel == 0)
+                {
+                    PointerLevel = 1;
+                }
+            }
+        }
+
+        public bool IsStruct { get; set; }
+        public string StructName { get; set; }
+        public bool IsArray { get; set; }
+        public int ArrayLength { get; set; }
+        public bool IsArrayLengthInferred { get; set; }
+
+        public CTypeInfo Clone()
+        {
+            return new CTypeInfo
+            {
+                Type = Type,
+                PointerLevel = PointerLevel,
+                IsStruct = IsStruct,
+                StructName = StructName,
+                IsArray = IsArray,
+                ArrayLength = ArrayLength,
+                IsArrayLengthInferred = IsArrayLengthInferred
+            };
+        }
+
+        public void CopyFrom(CTypeInfo other)
+        {
+            if (other == null) throw new ArgumentNullException(nameof(other));
+            Type = other.Type;
+            PointerLevel = other.PointerLevel;
+            IsStruct = other.IsStruct;
+            StructName = other.StructName;
+            IsArray = other.IsArray;
+            ArrayLength = other.ArrayLength;
+            IsArrayLengthInferred = other.IsArrayLengthInferred;
+        }
+
+        public string ToDisplayString()
+        {
+            string baseType = IsStruct && !string.IsNullOrEmpty(StructName) ? $"struct {StructName}" : Type;
+            if (string.IsNullOrEmpty(baseType))
+                baseType = "<unknown>";
+
+            string pointerSuffix = new string('*', PointerLevel);
+            string arraySuffix = IsArray ? $"[{ArrayLength}]" : "";
+            return baseType + pointerSuffix + arraySuffix;
+        }
+    }
 
     public class ProgramNode : IASTNode
     {
@@ -11,11 +90,13 @@ namespace CInterpreterWpf
 
     public class StructFieldDecl
     {
-        public string Type { get; set; }
+        public CTypeInfo TypeInfo { get; } = new CTypeInfo();
+        public string Type { get => TypeInfo.Type; set => TypeInfo.Type = value; }
         public string Name { get; set; }
-        public bool IsPointer { get; set; }
-        public bool IsStruct { get; set; }
-        public string StructName { get; set; }
+        public bool IsPointer { get => TypeInfo.IsPointer; set => TypeInfo.IsPointer = value; }
+        public int PointerLevel { get => TypeInfo.PointerLevel; set => TypeInfo.PointerLevel = value; }
+        public bool IsStruct { get => TypeInfo.IsStruct; set => TypeInfo.IsStruct = value; }
+        public string StructName { get => TypeInfo.StructName; set => TypeInfo.StructName = value; }
     }
 
     public class StructDeclNode : IASTNode
@@ -26,19 +107,23 @@ namespace CInterpreterWpf
 
     public class FunctionParameter
     {
-        public string Type { get; set; }
+        public CTypeInfo TypeInfo { get; } = new CTypeInfo();
+        public string Type { get => TypeInfo.Type; set => TypeInfo.Type = value; }
         public string Name { get; set; }
-        public bool IsPointer { get; set; }
-        public bool IsStruct { get; set; }
-        public string StructName { get; set; }
+        public bool IsPointer { get => TypeInfo.IsPointer; set => TypeInfo.IsPointer = value; }
+        public int PointerLevel { get => TypeInfo.PointerLevel; set => TypeInfo.PointerLevel = value; }
+        public bool IsStruct { get => TypeInfo.IsStruct; set => TypeInfo.IsStruct = value; }
+        public string StructName { get => TypeInfo.StructName; set => TypeInfo.StructName = value; }
     }
 
     public class FunctionDeclNode : IASTNode
     {
-        public string ReturnType { get; set; }
-        public bool ReturnIsPointer { get; set; }
-        public bool ReturnIsStruct { get; set; }
-        public string ReturnStructName { get; set; }
+        public CTypeInfo ReturnTypeInfo { get; } = new CTypeInfo();
+        public string ReturnType { get => ReturnTypeInfo.Type; set => ReturnTypeInfo.Type = value; }
+        public bool ReturnIsPointer { get => ReturnTypeInfo.IsPointer; set => ReturnTypeInfo.IsPointer = value; }
+        public int ReturnPointerLevel { get => ReturnTypeInfo.PointerLevel; set => ReturnTypeInfo.PointerLevel = value; }
+        public bool ReturnIsStruct { get => ReturnTypeInfo.IsStruct; set => ReturnTypeInfo.IsStruct = value; }
+        public string ReturnStructName { get => ReturnTypeInfo.StructName; set => ReturnTypeInfo.StructName = value; }
 
         public string Name { get; set; }
         public List<FunctionParameter> Parameters { get; } = new List<FunctionParameter>();
@@ -62,15 +147,17 @@ namespace CInterpreterWpf
 
     public class VarDeclNode : IASTNode
     {
-        public string Type { get; set; }
+        public CTypeInfo TypeInfo { get; } = new CTypeInfo();
+        public string Type { get => TypeInfo.Type; set => TypeInfo.Type = value; }
         public string VarName { get; set; }
         public IASTNode Initializer { get; set; }
-        public bool IsPointer { get; set; }
-        public bool IsArray { get; set; }
-        public int ArrayLength { get; set; }
-        public bool IsArrayLengthInferred { get; set; }
-        public bool IsStruct { get; set; }
-        public string StructName { get; set; }
+        public bool IsPointer { get => TypeInfo.IsPointer; set => TypeInfo.IsPointer = value; }
+        public int PointerLevel { get => TypeInfo.PointerLevel; set => TypeInfo.PointerLevel = value; }
+        public bool IsArray { get => TypeInfo.IsArray; set => TypeInfo.IsArray = value; }
+        public int ArrayLength { get => TypeInfo.ArrayLength; set => TypeInfo.ArrayLength = value; }
+        public bool IsArrayLengthInferred { get => TypeInfo.IsArrayLengthInferred; set => TypeInfo.IsArrayLengthInferred = value; }
+        public bool IsStruct { get => TypeInfo.IsStruct; set => TypeInfo.IsStruct = value; }
+        public string StructName { get => TypeInfo.StructName; set => TypeInfo.StructName = value; }
     }
 
     public class FunctionCallNode : IASTNode
