@@ -2,7 +2,7 @@ namespace CInterpreterWpf
 {
     public enum TokenType
     {
-        Int, Char, Void, Struct, Return,
+        Int, Char, Void, Typedef,Struct, Return,
         If, Else, While, For, Do, Break, Continue,
         Identifier, Number, StringLiteral, CharLiteral,
 

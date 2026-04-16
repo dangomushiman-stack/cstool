@@ -178,4 +178,8 @@ namespace CInterpreterWpf
         public IASTNode Increment { get; set; }
         public IASTNode Body { get; set; }
     }
+    public class TypedefNode : IASTNode
+    {
+        public string AliasName { get; set; }
+    }
 }

@@ -8,6 +8,17 @@ namespace CInterpreterWpf
         private readonly List<Token> _tokens;
         private int _position;
 
+        // --- typedef用の型記憶辞書を追加 ---
+        private readonly Dictionary<string, TypeInfo> _typedefs = new Dictionary<string, TypeInfo>();
+
+        private class TypeInfo
+        {
+            public string Type { get; set; }
+            public bool IsStruct { get; set; }
+            public string StructName { get; set; }
+            public bool IsPointer { get; set; }
+        }
+
         public Parser(List<Token> tokens)
         {
             _tokens = tokens;
@@ -39,18 +50,19 @@ namespace CInterpreterWpf
 
             while (CurrentToken.Type != TokenType.EOF)
             {
-                if (CurrentToken.Type == TokenType.Struct &&
-                    PeekToken().Type == TokenType.Identifier &&
-                    PeekToken(2).Type == TokenType.LBrace)
+                if (CurrentToken.Type == TokenType.Typedef)
+                {
+                    p.Declarations.Add(ParseTypedef());
+                }
+                else if (CurrentToken.Type == TokenType.Struct &&
+                         PeekToken().Type == TokenType.Identifier &&
+                         PeekToken(2).Type == TokenType.LBrace)
                 {
                     p.Declarations.Add(ParseStructDeclaration());
                 }
                 else if (IsTopLevelVariableDeclaration())
                 {
-                    if (CurrentToken.Type == TokenType.Struct)
-                        p.Declarations.Add(ParseStructVariableDeclaration(true));
-                    else
-                        p.Declarations.Add(ParseVariableDeclaration(true));
+                    p.Declarations.Add(ParseVariableDeclaration(true)); // 構造体も変数も統合
                 }
                 else
                 {
@@ -59,6 +71,51 @@ namespace CInterpreterWpf
             }
 
             return p;
+        }
+
+        // --- typedefのパース ---
+        private IASTNode ParseTypedef()
+        {
+            Expect(TokenType.Typedef);
+            var info = new TypeInfo();
+
+            if (CurrentToken.Type == TokenType.Struct)
+            {
+                Consume();
+                info.IsStruct = true;
+                info.StructName = Expect(TokenType.Identifier).Value;
+                info.Type = "struct";
+            }
+            else if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char || CurrentToken.Type == TokenType.Void)
+            {
+                info.Type = Consume().Value;
+            }
+            else if (CurrentToken.Type == TokenType.Identifier && _typedefs.TryGetValue(CurrentToken.Value, out var existing))
+            {
+                // 入れ子のtypedefに対応
+                Consume();
+                info.Type = existing.Type;
+                info.IsStruct = existing.IsStruct;
+                info.StructName = existing.StructName;
+                info.IsPointer = existing.IsPointer;
+            }
+            else
+            {
+                throw new Exception($"Invalid typedef base type at line {CurrentToken.Line}, column {CurrentToken.Column}");
+            }
+
+            if (CurrentToken.Type == TokenType.Asterisk)
+            {
+                Consume();
+                info.IsPointer = true;
+            }
+
+            string alias = Expect(TokenType.Identifier).Value;
+            Expect(TokenType.Semicolon);
+
+            _typedefs[alias] = info;
+
+            return new TypedefNode { AliasName = alias };
         }
 
         private bool IsTopLevelVariableDeclaration()
@@ -70,31 +127,28 @@ namespace CInterpreterWpf
                 {
                     Consume();
                     Expect(TokenType.Identifier);
-
-                    if (CurrentToken.Type == TokenType.Asterisk)
-                        Consume();
-
+                    if (CurrentToken.Type == TokenType.Asterisk) Consume();
                     Expect(TokenType.Identifier);
-
-                    if (CurrentToken.Type == TokenType.LParen)
-                        return false;
-
+                    if (CurrentToken.Type == TokenType.LParen) return false;
                     return true;
                 }
 
-                if (CurrentToken.Type == TokenType.Int ||
-                    CurrentToken.Type == TokenType.Char)
+                if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char)
                 {
                     Consume();
-
-                    if (CurrentToken.Type == TokenType.Asterisk)
-                        Consume();
-
+                    if (CurrentToken.Type == TokenType.Asterisk) Consume();
                     Expect(TokenType.Identifier);
+                    if (CurrentToken.Type == TokenType.LParen) return false;
+                    return true;
+                }
 
-                    if (CurrentToken.Type == TokenType.LParen)
-                        return false;
-
+                // typedefで定義された型名かどうか
+                if (CurrentToken.Type == TokenType.Identifier && _typedefs.ContainsKey(CurrentToken.Value))
+                {
+                    Consume();
+                    if (CurrentToken.Type == TokenType.Asterisk) Consume();
+                    Expect(TokenType.Identifier);
+                    if (CurrentToken.Type == TokenType.LParen) return false;
                     return true;
                 }
 
@@ -142,9 +196,17 @@ namespace CInterpreterWpf
             {
                 field.Type = Consume().Value;
             }
+            else if (CurrentToken.Type == TokenType.Identifier && _typedefs.TryGetValue(CurrentToken.Value, out var td))
+            {
+                Consume();
+                field.Type = td.Type;
+                field.IsStruct = td.IsStruct;
+                field.StructName = td.StructName;
+                field.IsPointer = td.IsPointer;
+            }
             else
             {
-                throw new Exception($"Struct field type must be int, char, or struct at line {CurrentToken.Line}, column {CurrentToken.Column}");
+                throw new Exception($"Struct field type error at line {CurrentToken.Line}");
             }
 
             if (CurrentToken.Type == TokenType.Asterisk)
@@ -169,11 +231,17 @@ namespace CInterpreterWpf
                 fn.ReturnIsStruct = true;
                 fn.ReturnStructName = Expect(TokenType.Identifier).Value;
             }
-            else if (CurrentToken.Type == TokenType.Int ||
-                     CurrentToken.Type == TokenType.Char ||
-                     CurrentToken.Type == TokenType.Void)
+            else if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char || CurrentToken.Type == TokenType.Void)
             {
                 fn.ReturnType = Consume().Value;
+            }
+            else if (CurrentToken.Type == TokenType.Identifier && _typedefs.TryGetValue(CurrentToken.Value, out var td))
+            {
+                Consume();
+                fn.ReturnType = td.Type;
+                fn.ReturnIsStruct = td.IsStruct;
+                fn.ReturnStructName = td.StructName;
+                fn.ReturnIsPointer = td.IsPointer; // typedefからの引き継ぎ
             }
             else
             {
@@ -228,9 +296,17 @@ namespace CInterpreterWpf
             {
                 param.Type = Consume().Value;
             }
+            else if (CurrentToken.Type == TokenType.Identifier && _typedefs.TryGetValue(CurrentToken.Value, out var td))
+            {
+                Consume();
+                param.Type = td.Type;
+                param.IsStruct = td.IsStruct;
+                param.StructName = td.StructName;
+                param.IsPointer = td.IsPointer;
+            }
             else
             {
-                throw new Exception($"Parameter type must be int, char, or struct at line {CurrentToken.Line}, column {CurrentToken.Column}");
+                throw new Exception($"Parameter type error at line {CurrentToken.Line}");
             }
 
             if (CurrentToken.Type == TokenType.Asterisk)
@@ -248,11 +324,12 @@ namespace CInterpreterWpf
             if (CurrentToken.Type == TokenType.LBrace)
                 return ParseBlock();
 
-            if (CurrentToken.Type == TokenType.Struct)
-                return ParseStructVariableDeclaration(true);
-
-            if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char)
+            // 型名による変数宣言の判定 (struct, int, char または typedef済の識別子)
+            if (CurrentToken.Type == TokenType.Struct || CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char || 
+               (CurrentToken.Type == TokenType.Identifier && _typedefs.ContainsKey(CurrentToken.Value)))
+            {
                 return ParseVariableDeclaration(true);
+            }
 
             if (CurrentToken.Type == TokenType.If)
                 return ParseIfStatement();
@@ -304,17 +381,34 @@ namespace CInterpreterWpf
             throw new Exception($"Unknown statement at line {CurrentToken.Line}, column {CurrentToken.Column}");
         }
 
-        private IASTNode ParseStructVariableDeclaration(bool expectSemicolon)
+        // --- 統合・強化された変数宣言パース ---
+        private VarDeclNode ParseVariableDeclaration(bool expectSemicolon)
         {
-            Expect(TokenType.Struct);
-            string structName = Expect(TokenType.Identifier).Value;
+            var v = new VarDeclNode();
 
-            var v = new VarDeclNode
+            if (CurrentToken.Type == TokenType.Struct)
             {
-                Type = "struct",
-                StructName = structName,
-                IsStruct = true
-            };
+                Consume();
+                v.Type = "struct";
+                v.IsStruct = true;
+                v.StructName = Expect(TokenType.Identifier).Value;
+            }
+            else if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char)
+            {
+                v.Type = Consume().Value;
+            }
+            else if (CurrentToken.Type == TokenType.Identifier && _typedefs.TryGetValue(CurrentToken.Value, out var td))
+            {
+                Consume();
+                v.Type = td.Type;
+                v.IsStruct = td.IsStruct;
+                v.StructName = td.StructName;
+                v.IsPointer = td.IsPointer;
+            }
+            else
+            {
+                throw new Exception($"Expected type at line {CurrentToken.Line}");
+            }
 
             if (CurrentToken.Type == TokenType.Asterisk)
             {
@@ -326,11 +420,9 @@ namespace CInterpreterWpf
 
             if (CurrentToken.Type == TokenType.LBracket)
             {
-                if (v.IsPointer)
-                    throw new Exception("Pointer arrays are not supported yet");
+                if (v.IsPointer) throw new Exception("Pointer arrays are not supported yet");
 
                 Consume();
-
                 if (CurrentToken.Type == TokenType.RBracket)
                 {
                     v.IsArray = true;
@@ -352,27 +444,34 @@ namespace CInterpreterWpf
                 if (CurrentToken.Type == TokenType.Assign)
                 {
                     Consume();
-                    throw new Exception("Struct array initializer is not supported yet");
+                    if (v.IsStruct) {
+                        throw new Exception("Struct array initializer is not supported yet");
+                    } else if (CurrentToken.Type == TokenType.LBrace) {
+                        v.Initializer = ParseArrayInitializer();
+                    } else if (CurrentToken.Type == TokenType.StringLiteral && v.Type == "char") {
+                        v.Initializer = ParseExpression();
+                    } else {
+                        throw new Exception("Array initializer must be {...} or string literal for char array");
+                    }
                 }
-
-                if (v.IsArrayLengthInferred)
-                    throw new Exception("Struct array length may not be omitted");
+                else if (v.IsArrayLengthInferred)
+                {
+                    throw new Exception("Array length may be omitted only when initializer is provided");
+                }
             }
             else if (CurrentToken.Type == TokenType.Assign)
             {
                 Consume();
-
-                if (v.IsPointer)
+                if (v.IsStruct && !v.IsPointer)
                 {
-                    v.Initializer = ParseExpression();
-                }
-                else if (CurrentToken.Type == TokenType.LBrace)
-                {
-                    v.Initializer = ParseStructInitializer();
+                    if (CurrentToken.Type == TokenType.LBrace)
+                        v.Initializer = ParseStructInitializer();
+                    else
+                        throw new Exception("Struct initializer must be {...}");
                 }
                 else
                 {
-                    throw new Exception("Struct initializer must be {...}");
+                    v.Initializer = ParseExpression();
                 }
             }
 
@@ -466,77 +565,6 @@ namespace CInterpreterWpf
 
             Expect(TokenType.RBrace);
             return block;
-        }
-
-        private IASTNode ParseVariableDeclaration(bool expectSemicolon)
-        {
-            var v = new VarDeclNode { Type = Consume().Value };
-
-            if (CurrentToken.Type == TokenType.Asterisk)
-            {
-                Consume();
-                v.IsPointer = true;
-            }
-
-            v.VarName = Expect(TokenType.Identifier).Value;
-
-            if (CurrentToken.Type == TokenType.LBracket)
-            {
-                if (v.IsPointer)
-                    throw new Exception("Pointer arrays are not supported yet");
-
-                Consume();
-
-                if (CurrentToken.Type == TokenType.RBracket)
-                {
-                    v.IsArray = true;
-                    v.IsArrayLengthInferred = true;
-                    v.ArrayLength = 0;
-                    Consume();
-                }
-                else
-                {
-                    var lengthNode = ParseExpression();
-                    if (lengthNode is not NumberNode len || len.Value <= 0)
-                        throw new Exception("Array length must be a positive integer literal");
-
-                    v.IsArray = true;
-                    v.ArrayLength = len.Value;
-                    Expect(TokenType.RBracket);
-                }
-
-                if (CurrentToken.Type == TokenType.Assign)
-                {
-                    Consume();
-
-                    if (CurrentToken.Type == TokenType.LBrace)
-                    {
-                        v.Initializer = ParseArrayInitializer();
-                    }
-                    else if (CurrentToken.Type == TokenType.StringLiteral && v.Type == "char")
-                    {
-                        v.Initializer = ParseExpression();
-                    }
-                    else
-                    {
-                        throw new Exception("Array initializer must be {...} or string literal for char array");
-                    }
-                }
-                else if (v.IsArrayLengthInferred)
-                {
-                    throw new Exception("Array length may be omitted only when initializer is provided");
-                }
-            }
-            else if (CurrentToken.Type == TokenType.Assign)
-            {
-                Consume();
-                v.Initializer = ParseExpression();
-            }
-
-            if (expectSemicolon)
-                Expect(TokenType.Semicolon);
-
-            return v;
         }
 
         private ArrayInitializerNode ParseArrayInitializer()
@@ -742,9 +770,8 @@ namespace CInterpreterWpf
             IASTNode initializer = null;
             if (CurrentToken.Type != TokenType.Semicolon)
             {
-                if (CurrentToken.Type == TokenType.Struct)
-                    initializer = ParseStructVariableDeclaration(false);
-                else if (CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char)
+                if (CurrentToken.Type == TokenType.Struct || CurrentToken.Type == TokenType.Int || CurrentToken.Type == TokenType.Char ||
+                   (CurrentToken.Type == TokenType.Identifier && _typedefs.ContainsKey(CurrentToken.Value)))
                     initializer = ParseVariableDeclaration(false);
                 else if (IsStartOfAssignment())
                     initializer = ParseAssignmentStatement(false);

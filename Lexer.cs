@@ -197,6 +197,7 @@ namespace CInterpreterWpf
                 "char" => TokenType.Char,
                 "void" => TokenType.Void,
                 "struct" => TokenType.Struct,
+                "typedef" => TokenType.Typedef,
                 "return" => TokenType.Return,
                 "if" => TokenType.If,
                 "else" => TokenType.Else,
