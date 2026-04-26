@@ -273,4 +273,10 @@ namespace CInterpreterWpf
     {
         public double Value { get; set; }
     }
+
+    public class CastNode : IASTNode
+    {
+        public CTypeInfo TargetTypeInfo { get; set; } = new CTypeInfo();
+        public IASTNode Expression { get; set; }
+    }
 }

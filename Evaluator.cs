@@ -1466,6 +1466,26 @@ namespace CInterpreterWpf
 
         private object EvaluateExpression(IASTNode expr)
         {
+
+
+            if (expr is CastNode cast)
+            {
+                int value = Convert.ToInt32(EvaluateExpression(cast.Expression));
+
+                if (cast.TargetTypeInfo.PointerLevel > 0)
+                    return value;
+
+                return cast.TargetTypeInfo.Type switch
+                {
+                    "char" => (byte)value,
+                    "short" => (short)value,
+                    "int" => value,
+                    "long" => value,
+                    _ => value
+                };
+            }
+
+
             if (expr is NumberNode n) return n.Value;
             if (expr is CharLiteralNode c) return (int)c.Value;
             if (expr is StringNode s) return EnsureStringLiteral(s.Value);

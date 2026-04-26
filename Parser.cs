@@ -1035,9 +1035,30 @@ namespace CInterpreterWpf
 
         private IASTNode ParseUnary()
         {
-            if (CurrentToken.Type == TokenType.Increment ||
-                CurrentToken.Type == TokenType.Decrement ||
-                CurrentToken.Type == TokenType.Ampersand ||
+            if (CurrentToken.Type == TokenType.LParen && IsStartOfTypeNameInsideParen())
+                return ParseCastExpression();
+
+            if (CurrentToken.Type == TokenType.Increment)
+            {
+                Consume();
+                return new UnaryOpNode
+                {
+                    Operator = "++",
+                    Target = ParseAssignableTarget()
+                };
+            }
+
+            if (CurrentToken.Type == TokenType.Decrement)
+            {
+                Consume();
+                return new UnaryOpNode
+                {
+                    Operator = "--",
+                    Target = ParseAssignableTarget()
+                };
+            }
+
+            if (CurrentToken.Type == TokenType.Ampersand ||
                 CurrentToken.Type == TokenType.Asterisk ||
                 CurrentToken.Type == TokenType.Minus ||
                 CurrentToken.Type == TokenType.LogicalNot)
@@ -1145,5 +1166,124 @@ namespace CInterpreterWpf
 
             throw new Exception($"Unexpected token in expression: {CurrentToken.Type} at line {CurrentToken.Line}, column {CurrentToken.Column}");
         }
+        private bool IsStartOfTypeNameInsideParen()
+        {
+            if (CurrentToken.Type != TokenType.LParen)
+                return false;
+
+            int saved = _position;
+            try
+            {
+                Consume(); // '('
+
+                if (CurrentToken.Type == TokenType.Struct)
+                {
+                    Consume();
+
+                    if (CurrentToken.Type != TokenType.Identifier)
+                        return false;
+
+                    Consume();
+
+                    while (CurrentToken.Type == TokenType.Asterisk)
+                        Consume();
+
+                    return CurrentToken.Type == TokenType.RParen;
+                }
+
+                if (IsBasicType(CurrentToken.Type))
+                {
+                    Consume();
+
+                    while (CurrentToken.Type == TokenType.Asterisk)
+                        Consume();
+
+                    return CurrentToken.Type == TokenType.RParen;
+                }
+
+                if (CurrentToken.Type == TokenType.Identifier && _typedefs.ContainsKey(CurrentToken.Value))
+                {
+                    Consume();
+
+                    while (CurrentToken.Type == TokenType.Asterisk)
+                        Consume();
+
+                    return CurrentToken.Type == TokenType.RParen;
+                }
+
+                return false;
+            }
+            finally
+            {
+                _position = saved;
+            }
+        }
+        private CTypeInfo ParseTypeNameForCast()
+        {
+            var t = new CTypeInfo();
+
+            if (CurrentToken.Type == TokenType.Struct)
+            {
+                Consume();
+                t.Type = "struct";
+                t.IsStruct = true;
+                t.StructName = Expect(TokenType.Identifier).Value;
+            }
+            else if (IsBasicType(CurrentToken.Type))
+            {
+                t.Type = Consume().Value;
+            }
+            else if (CurrentToken.Type == TokenType.Identifier &&
+                    _typedefs.TryGetValue(CurrentToken.Value, out var td))
+            {
+                Consume();
+
+                t.Type = td.Type;
+                t.IsStruct = td.IsStruct;
+                t.StructName = td.StructName;
+                t.IsPointer = td.IsPointer;
+
+                if (td.PointerLevel > 0)
+                    t.PointerLevel = td.PointerLevel;
+            }
+            else
+            {
+                throw new Exception($"Invalid cast type at line {CurrentToken.Line}, column {CurrentToken.Column}");
+            }
+
+            int pointerLevel = 0;
+            while (CurrentToken.Type == TokenType.Asterisk)
+            {
+                Consume();
+                pointerLevel++;
+            }
+
+            if (pointerLevel > 0)
+            {
+                t.PointerLevel += pointerLevel;
+                t.IsPointer = t.PointerLevel > 0;
+            }
+
+            return t;
+        }
+        
+
+        private IASTNode ParseCastExpression()
+        {
+            Expect(TokenType.LParen);
+            var typeInfo = ParseTypeNameForCast();
+            Expect(TokenType.RParen);
+
+            return new CastNode
+            {
+                TargetTypeInfo = typeInfo,
+                Expression = ParseUnary()
+            };
+        }
+
+
+
+
     }
+    
 }
