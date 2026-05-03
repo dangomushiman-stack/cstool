@@ -8,10 +8,13 @@ namespace CInterpreterWpf
         private readonly List<Token> _tokens;
         private int _position;
         private int _anonymousStructCounter = 0;
+        private int _anonymousEnumCounter = 0;
         private readonly List<IASTNode> _pendingDeclarations = new List<IASTNode>();
 
         // typedef用の型記憶辞書
         private readonly Dictionary<string, TypeInfo> _typedefs = new Dictionary<string, TypeInfo>();
+        private readonly HashSet<string> _enumTags = new HashSet<string>();
+        private readonly Dictionary<string, int> _enumConstants = new Dictionary<string, int>();
 
         private class TypeInfo
         {
@@ -45,6 +48,12 @@ namespace CInterpreterWpf
             return $"__anon_struct_{_anonymousStructCounter}";
         }
 
+        private string GenerateAnonymousEnumName()
+        {
+            _anonymousEnumCounter++;
+            return $"__anon_enum_{_anonymousEnumCounter}";
+        }
+
         private void FlushPendingDeclarations(ProgramNode program)
         {
             if (program == null || _pendingDeclarations.Count == 0)
@@ -62,7 +71,13 @@ namespace CInterpreterWpf
                    t == TokenType.PlusAssign ||
                    t == TokenType.MinusAssign ||
                    t == TokenType.AsteriskAssign ||
-                   t == TokenType.SlashAssign;
+                   t == TokenType.SlashAssign ||
+                   t == TokenType.PercentAssign ||
+                   t == TokenType.AmpersandAssign ||
+                   t == TokenType.BitwiseOrAssign ||
+                   t == TokenType.BitwiseXorAssign ||
+                   t == TokenType.ShiftLeftAssign ||
+                   t == TokenType.ShiftRightAssign;
         }
 
         // 基本型を判定するヘルパー
@@ -71,6 +86,14 @@ namespace CInterpreterWpf
             return t == TokenType.Int || t == TokenType.Char || t == TokenType.Void ||
                    t == TokenType.Short || t == TokenType.Long || 
                    t == TokenType.Float || t == TokenType.Double;
+        }
+
+        private bool IsTypeStart()
+        {
+            return CurrentToken.Type == TokenType.Struct ||
+                   CurrentToken.Type == TokenType.Enum ||
+                   IsBasicType(CurrentToken.Type) ||
+                   (CurrentToken.Type == TokenType.Identifier && _typedefs.ContainsKey(CurrentToken.Value));
         }
 
         private static void CopyTypeInfo(CTypeInfo destination, CTypeInfo source)
@@ -132,11 +155,19 @@ namespace CInterpreterWpf
                     FlushPendingDeclarations(p);
                     p.Declarations.Add(decl);
                 }
+                else if (CurrentToken.Type == TokenType.Enum &&
+                        ((PeekToken().Type == TokenType.Identifier && PeekToken(2).Type == TokenType.LBrace) ||
+                         PeekToken().Type == TokenType.LBrace))
+                {
+                    var decl = ParseEnumDeclaration();
+                    FlushPendingDeclarations(p);
+                    p.Declarations.Add(decl);
+                }
                 else if (IsTopLevelVariableDeclaration())
                 {
                     var decl = ParseVariableDeclaration(true);
                     FlushPendingDeclarations(p);
-                    p.Declarations.Add(decl);
+                    AddDeclaration(p, decl);
                 }
                 else
                 {
@@ -150,11 +181,25 @@ namespace CInterpreterWpf
             return p;
         }
 
+        private static void AddDeclaration(ProgramNode program, IASTNode declaration)
+        {
+            if (declaration is VarDeclListNode list)
+            {
+                foreach (var item in list.Declarations)
+                    program.Declarations.Add(item);
+            }
+            else
+            {
+                program.Declarations.Add(declaration);
+            }
+        }
+
         private IASTNode ParseTypedef(ProgramNode program)
         {
             Expect(TokenType.Typedef);
             var info = new TypeInfo();
             StructDeclNode structDef = null;
+            EnumDeclNode enumDef = null;
 
             if (CurrentToken.Type == TokenType.Struct)
             {
@@ -181,6 +226,11 @@ namespace CInterpreterWpf
             else if (IsBasicType(CurrentToken.Type))
             {
                 info.Type = Consume().Value;
+            }
+            else if (CurrentToken.Type == TokenType.Enum)
+            {
+                enumDef = ParseEnumDeclarationCore(expectSemicolon: false);
+                info.Type = "int";
             }
             else if (CurrentToken.Type == TokenType.Identifier && _typedefs.TryGetValue(CurrentToken.Value, out var existing))
             {
@@ -210,6 +260,16 @@ namespace CInterpreterWpf
                 }
             }
 
+            if (enumDef != null)
+            {
+                if (string.IsNullOrEmpty(enumDef.Name))
+                    enumDef.Name = alias;
+
+                _enumTags.Add(enumDef.Name);
+                if (program != null)
+                    program.Declarations.Add(enumDef);
+            }
+
             _typedefs[alias] = info;
 
             return new TypedefNode { AliasName = alias };
@@ -224,6 +284,19 @@ namespace CInterpreterWpf
                 {
                     Consume();
                     Expect(TokenType.Identifier);
+                    ConsumePointerDeclarators();
+                    Expect(TokenType.Identifier);
+                    if (CurrentToken.Type == TokenType.LParen) return false;
+                    return true;
+                }
+
+                if (CurrentToken.Type == TokenType.Enum)
+                {
+                    Consume();
+                    if (CurrentToken.Type == TokenType.Identifier)
+                        Consume();
+                    if (CurrentToken.Type == TokenType.LBrace)
+                        return false;
                     ConsumePointerDeclarators();
                     Expect(TokenType.Identifier);
                     if (CurrentToken.Type == TokenType.LParen) return false;
@@ -286,6 +359,73 @@ namespace CInterpreterWpf
             return ParseStructDeclarationCore();
         }
 
+        private EnumDeclNode ParseEnumDeclaration()
+        {
+            return ParseEnumDeclarationCore();
+        }
+
+        private EnumDeclNode ParseEnumDeclarationCore(bool expectSemicolon = true)
+        {
+            Expect(TokenType.Enum);
+
+            string enumName = null;
+            if (CurrentToken.Type == TokenType.Identifier)
+                enumName = Consume().Value;
+
+            var node = new EnumDeclNode { Name = enumName };
+
+            if (CurrentToken.Type == TokenType.LBrace)
+            {
+                if (string.IsNullOrEmpty(node.Name))
+                    node.Name = GenerateAnonymousEnumName();
+
+                Consume();
+                int nextValue = 0;
+
+                while (CurrentToken.Type != TokenType.RBrace)
+                {
+                    string memberName = Expect(TokenType.Identifier).Value;
+                    int value = nextValue;
+
+                    if (CurrentToken.Type == TokenType.Assign)
+                    {
+                        Consume();
+                        value = EvaluateConstantExpression(ParseExpression());
+                    }
+
+                    if (_enumConstants.ContainsKey(memberName))
+                        throw new Exception($"Duplicate enum constant '{memberName}'");
+
+                    _enumConstants[memberName] = value;
+                    node.Members.Add(new EnumMemberDecl { Name = memberName, Value = value });
+                    nextValue = value + 1;
+
+                    if (CurrentToken.Type == TokenType.Comma)
+                    {
+                        Consume();
+                        if (CurrentToken.Type == TokenType.RBrace)
+                            break;
+                    }
+                    else if (CurrentToken.Type != TokenType.RBrace)
+                    {
+                        throw new Exception($"Expected ',' or '}}' in enum declaration at line {CurrentToken.Line}, column {CurrentToken.Column}");
+                    }
+                }
+
+                Expect(TokenType.RBrace);
+                _enumTags.Add(node.Name);
+            }
+            else if (string.IsNullOrEmpty(node.Name) || !_enumTags.Contains(node.Name))
+            {
+                throw new Exception($"Unknown enum type at line {CurrentToken.Line}, column {CurrentToken.Column}");
+            }
+
+            if (expectSemicolon)
+                Expect(TokenType.Semicolon);
+
+            return node;
+        }
+
         private StructFieldDecl ParseStructField()
         {
             var field = new StructFieldDecl();
@@ -330,6 +470,15 @@ namespace CInterpreterWpf
                 {
                     Type = field.Type
                 });
+            }
+            else if (CurrentToken.Type == TokenType.Enum)
+            {
+                var enumDecl = ParseEnumDeclarationCore(expectSemicolon: false);
+                if (enumDecl.Members.Count > 0)
+                    _pendingDeclarations.Add(enumDecl);
+
+                field.Type = "int";
+                ApplyTypeInfo(field, new CTypeInfo { Type = "int" });
             }
             else if (CurrentToken.Type == TokenType.Identifier && _typedefs.TryGetValue(CurrentToken.Value, out var td))
             {
@@ -384,6 +533,14 @@ namespace CInterpreterWpf
             {
                 fn.ReturnType = Consume().Value;
             }
+            else if (CurrentToken.Type == TokenType.Enum)
+            {
+                var enumDecl = ParseEnumDeclarationCore(expectSemicolon: false);
+                if (enumDecl.Members.Count > 0)
+                    _pendingDeclarations.Add(enumDecl);
+
+                fn.ReturnType = "int";
+            }
             else if (CurrentToken.Type == TokenType.Identifier && _typedefs.TryGetValue(CurrentToken.Value, out var td))
             {
                 Consume();
@@ -421,7 +578,21 @@ namespace CInterpreterWpf
             // --- ここまで ---
 
             Expect(TokenType.RParen);
+
+            if (CurrentToken.Type == TokenType.Semicolon)
+            {
+                Consume();
+                fn.IsPrototype = true;
+                return fn;
+            }
+
             Expect(TokenType.LBrace);
+
+            foreach (var param in fn.Parameters)
+            {
+                if (string.IsNullOrEmpty(param.Name))
+                    throw new Exception($"Parameter name is required in function definition '{fn.Name}'");
+            }
 
             while (CurrentToken.Type != TokenType.RBrace)
                 fn.Body.Add(ParseStatement());
@@ -445,6 +616,14 @@ namespace CInterpreterWpf
             {
                 param.Type = Consume().Value;
             }
+            else if (CurrentToken.Type == TokenType.Enum)
+            {
+                var enumDecl = ParseEnumDeclarationCore(expectSemicolon: false);
+                if (enumDecl.Members.Count > 0)
+                    _pendingDeclarations.Add(enumDecl);
+
+                param.Type = "int";
+            }
             else if (CurrentToken.Type == TokenType.Identifier && _typedefs.TryGetValue(CurrentToken.Value, out var td))
             {
                 Consume();
@@ -457,7 +636,9 @@ namespace CInterpreterWpf
 
             param.PointerLevel += ConsumePointerDeclarators();
 
-            param.Name = Expect(TokenType.Identifier).Value;
+            if (CurrentToken.Type == TokenType.Identifier)
+                param.Name = Consume().Value;
+
             return param;
         }
 
@@ -471,8 +652,14 @@ namespace CInterpreterWpf
                 return ParseTypedef(null); 
             }
 
-            if (CurrentToken.Type == TokenType.Struct || IsBasicType(CurrentToken.Type) || 
-               (CurrentToken.Type == TokenType.Identifier && _typedefs.ContainsKey(CurrentToken.Value)))
+            if (CurrentToken.Type == TokenType.Enum &&
+                ((PeekToken().Type == TokenType.Identifier && PeekToken(2).Type == TokenType.LBrace) ||
+                 PeekToken().Type == TokenType.LBrace))
+            {
+                return ParseEnumDeclaration();
+            }
+
+            if (IsTypeStart())
             {
                 return ParseVariableDeclaration(true);
             }
@@ -488,6 +675,9 @@ namespace CInterpreterWpf
 
             if (CurrentToken.Type == TokenType.For)
                 return ParseForStatement();
+
+            if (CurrentToken.Type == TokenType.Switch)
+                return ParseSwitchStatement();
 
             if (CurrentToken.Type == TokenType.Break)
             {
@@ -527,35 +717,72 @@ namespace CInterpreterWpf
             throw new Exception($"Unknown statement at line {CurrentToken.Line}, column {CurrentToken.Column}");
         }
 
-        private VarDeclNode ParseVariableDeclaration(bool expectSemicolon)
+        private IASTNode ParseVariableDeclaration(bool expectSemicolon)
         {
-            var v = new VarDeclNode();
+            var baseType = ParseDeclarationBaseType();
+            var list = new VarDeclListNode();
+
+            while (true)
+            {
+                var v = new VarDeclNode();
+                ApplyTypeInfo(v, baseType);
+
+                v.PointerLevel += ConsumePointerDeclarators();
+                v.VarName = Expect(TokenType.Identifier).Value;
+
+                ParseVariableDeclaratorSuffix(v);
+                list.Declarations.Add(v);
+
+                if (CurrentToken.Type != TokenType.Comma)
+                    break;
+
+                Consume();
+            }
+
+            if (expectSemicolon)
+                Expect(TokenType.Semicolon);
+
+            return list.Declarations.Count == 1 ? list.Declarations[0] : list;
+        }
+
+        private CTypeInfo ParseDeclarationBaseType()
+        {
+            var typeInfo = new CTypeInfo();
 
             if (CurrentToken.Type == TokenType.Struct)
             {
                 Consume();
-                v.Type = "struct";
-                v.IsStruct = true;
-                v.StructName = Expect(TokenType.Identifier).Value;
+                typeInfo.Type = "struct";
+                typeInfo.IsStruct = true;
+                typeInfo.StructName = Expect(TokenType.Identifier).Value;
+            }
+            else if (CurrentToken.Type == TokenType.Enum)
+            {
+                var enumDecl = ParseEnumDeclarationCore(expectSemicolon: false);
+                if (enumDecl.Members.Count > 0)
+                    _pendingDeclarations.Add(enumDecl);
+
+                typeInfo.Type = "int";
             }
             else if (IsBasicType(CurrentToken.Type))
             {
-                v.Type = Consume().Value;
+                typeInfo.Type = Consume().Value;
             }
             else if (CurrentToken.Type == TokenType.Identifier && _typedefs.TryGetValue(CurrentToken.Value, out var td))
             {
                 Consume();
-                ApplyTypeInfo(v, td.TypeInfoValue);
+                typeInfo.CopyFrom(td.TypeInfoValue);
             }
             else
             {
                 throw new Exception($"Expected type at line {CurrentToken.Line}");
             }
 
-            v.PointerLevel += ConsumePointerDeclarators();
+            return typeInfo;
+        }
 
-            v.VarName = Expect(TokenType.Identifier).Value;
-
+        private void ParseVariableDeclaratorSuffix(VarDeclNode v)
+        {
             if (CurrentToken.Type == TokenType.LBracket)
             {
                 if (v.IsPointer) throw new Exception("Pointer arrays are not supported yet");
@@ -612,11 +839,6 @@ namespace CInterpreterWpf
                     v.Initializer = ParseExpression();
                 }
             }
-
-            if (expectSemicolon)
-                Expect(TokenType.Semicolon);
-
-            return v;
         }
 
         private StructInitializerNode ParseStructInitializer()
@@ -705,6 +927,55 @@ namespace CInterpreterWpf
             return block;
         }
 
+        private SwitchNode ParseSwitchStatement()
+        {
+            Consume();
+            Expect(TokenType.LParen);
+            var expression = ParseExpression();
+            Expect(TokenType.RParen);
+            Expect(TokenType.LBrace);
+
+            var switchNode = new SwitchNode { Expression = expression };
+            bool hasDefault = false;
+
+            while (CurrentToken.Type != TokenType.RBrace)
+            {
+                SwitchCaseNode section;
+                if (CurrentToken.Type == TokenType.Case)
+                {
+                    Consume();
+                    section = new SwitchCaseNode { Value = ParseExpression() };
+                    Expect(TokenType.Colon);
+                }
+                else if (CurrentToken.Type == TokenType.Default)
+                {
+                    if (hasDefault)
+                        throw new Exception($"Duplicate default label at line {CurrentToken.Line}, column {CurrentToken.Column}");
+
+                    Consume();
+                    section = new SwitchCaseNode { IsDefault = true };
+                    hasDefault = true;
+                    Expect(TokenType.Colon);
+                }
+                else
+                {
+                    throw new Exception($"Expected case or default label at line {CurrentToken.Line}, column {CurrentToken.Column}");
+                }
+
+                while (CurrentToken.Type != TokenType.Case &&
+                       CurrentToken.Type != TokenType.Default &&
+                       CurrentToken.Type != TokenType.RBrace)
+                {
+                    section.Statements.Add(ParseStatement());
+                }
+
+                switchNode.Cases.Add(section);
+            }
+
+            Expect(TokenType.RBrace);
+            return switchNode;
+        }
+
         private ArrayInitializerNode ParseArrayInitializer()
         {
             var init = new ArrayInitializerNode();
@@ -750,6 +1021,12 @@ namespace CInterpreterWpf
                 TokenType.MinusAssign => Consume().Value,
                 TokenType.AsteriskAssign => Consume().Value,
                 TokenType.SlashAssign => Consume().Value,
+                TokenType.PercentAssign => Consume().Value,
+                TokenType.AmpersandAssign => Consume().Value,
+                TokenType.BitwiseOrAssign => Consume().Value,
+                TokenType.BitwiseXorAssign => Consume().Value,
+                TokenType.ShiftLeftAssign => Consume().Value,
+                TokenType.ShiftRightAssign => Consume().Value,
                 _ => throw new Exception($"Expected assignment operator at line {CurrentToken.Line}, column {CurrentToken.Column}")
             };
 
@@ -908,8 +1185,7 @@ namespace CInterpreterWpf
             IASTNode initializer = null;
             if (CurrentToken.Type != TokenType.Semicolon)
             {
-                if (CurrentToken.Type == TokenType.Struct || IsBasicType(CurrentToken.Type) ||
-                   (CurrentToken.Type == TokenType.Identifier && _typedefs.ContainsKey(CurrentToken.Value)))
+                if (IsTypeStart())
                     initializer = ParseVariableDeclaration(false);
                 else if (IsStartOfAssignment())
                     initializer = ParseAssignmentStatement(false);
@@ -944,7 +1220,28 @@ namespace CInterpreterWpf
 
         private IASTNode ParseExpression()
         {
-            return ParseLogicalOr();
+            return ParseConditional();
+        }
+
+        private IASTNode ParseConditional()
+        {
+            var node = ParseLogicalOr();
+
+            if (CurrentToken.Type == TokenType.Question)
+            {
+                Consume();
+                var trueExpression = ParseExpression();
+                Expect(TokenType.Colon);
+
+                node = new ConditionalOpNode
+                {
+                    Condition = node,
+                    TrueExpression = trueExpression,
+                    FalseExpression = ParseConditional()
+                };
+            }
+
+            return node;
         }
 
         private IASTNode ParseLogicalOr()
@@ -966,9 +1263,60 @@ namespace CInterpreterWpf
 
         private IASTNode ParseLogicalAnd()
         {
-            var node = ParseEquality();
+            var node = ParseBitwiseOr();
 
             while (CurrentToken.Type == TokenType.LogicalAnd)
+            {
+                node = new BinaryOpNode
+                {
+                    Left = node,
+                    Operator = Consume().Value,
+                    Right = ParseBitwiseOr()
+                };
+            }
+
+            return node;
+        }
+
+        private IASTNode ParseBitwiseOr()
+        {
+            var node = ParseBitwiseXor();
+
+            while (CurrentToken.Type == TokenType.BitwiseOr)
+            {
+                node = new BinaryOpNode
+                {
+                    Left = node,
+                    Operator = Consume().Value,
+                    Right = ParseBitwiseXor()
+                };
+            }
+
+            return node;
+        }
+
+        private IASTNode ParseBitwiseXor()
+        {
+            var node = ParseBitwiseAnd();
+
+            while (CurrentToken.Type == TokenType.BitwiseXor)
+            {
+                node = new BinaryOpNode
+                {
+                    Left = node,
+                    Operator = Consume().Value,
+                    Right = ParseBitwiseAnd()
+                };
+            }
+
+            return node;
+        }
+
+        private IASTNode ParseBitwiseAnd()
+        {
+            var node = ParseEquality();
+
+            while (CurrentToken.Type == TokenType.Ampersand)
             {
                 node = new BinaryOpNode
                 {
@@ -1000,12 +1348,30 @@ namespace CInterpreterWpf
 
         private IASTNode ParseComparison()
         {
-            var node = ParseAdditive();
+            var node = ParseShift();
 
             while (CurrentToken.Type == TokenType.Less ||
                    CurrentToken.Type == TokenType.LessEqual ||
                    CurrentToken.Type == TokenType.Greater ||
                    CurrentToken.Type == TokenType.GreaterEqual)
+            {
+                node = new BinaryOpNode
+                {
+                    Left = node,
+                    Operator = Consume().Value,
+                    Right = ParseShift()
+                };
+            }
+
+            return node;
+        }
+
+        private IASTNode ParseShift()
+        {
+            var node = ParseAdditive();
+
+            while (CurrentToken.Type == TokenType.ShiftLeft ||
+                   CurrentToken.Type == TokenType.ShiftRight)
             {
                 node = new BinaryOpNode
                 {
@@ -1085,7 +1451,8 @@ namespace CInterpreterWpf
             if (CurrentToken.Type == TokenType.Ampersand ||
                 CurrentToken.Type == TokenType.Asterisk ||
                 CurrentToken.Type == TokenType.Minus ||
-                CurrentToken.Type == TokenType.LogicalNot)
+                CurrentToken.Type == TokenType.LogicalNot ||
+                CurrentToken.Type == TokenType.BitwiseNot)
             {
                 string op = Consume().Value;
                 return new UnaryOpNode
@@ -1202,6 +1569,12 @@ namespace CInterpreterWpf
 
             if (CurrentToken.Type == TokenType.Identifier)
             {
+                if (_enumConstants.TryGetValue(CurrentToken.Value, out int enumValue))
+                {
+                    Consume();
+                    return new NumberNode { Value = enumValue };
+                }
+
                 if (PeekToken().Type == TokenType.LParen)
                     return ParseFunctionCallExpression();
 
@@ -1217,6 +1590,67 @@ namespace CInterpreterWpf
             }
 
             throw new Exception($"Unexpected token in expression: {CurrentToken.Type} at line {CurrentToken.Line}, column {CurrentToken.Column}");
+        }
+
+        private int EvaluateConstantExpression(IASTNode expr)
+        {
+            if (expr is NumberNode n) return n.Value;
+            if (expr is CharLiteralNode c) return c.Value;
+            if (expr is ConditionalOpNode conditional)
+                return EvaluateConstantExpression(conditional.Condition) != 0
+                    ? EvaluateConstantExpression(conditional.TrueExpression)
+                    : EvaluateConstantExpression(conditional.FalseExpression);
+            if (expr is UnaryOpNode u)
+            {
+                int value = EvaluateConstantExpression(u.Target);
+                return u.Operator switch
+                {
+                    "-" => -value,
+                    "!" => value == 0 ? 1 : 0,
+                    "~" => ~value,
+                    _ => throw new Exception($"Invalid enum constant expression operator '{u.Operator}'")
+                };
+            }
+            if (expr is BinaryOpNode b)
+            {
+                int left = EvaluateConstantExpression(b.Left);
+
+                if (b.Operator == "&&")
+                {
+                    if (left == 0) return 0;
+                    return EvaluateConstantExpression(b.Right) != 0 ? 1 : 0;
+                }
+
+                if (b.Operator == "||")
+                {
+                    if (left != 0) return 1;
+                    return EvaluateConstantExpression(b.Right) != 0 ? 1 : 0;
+                }
+
+                int right = EvaluateConstantExpression(b.Right);
+                return b.Operator switch
+                {
+                    "+" => left + right,
+                    "-" => left - right,
+                    "*" => left * right,
+                    "/" => left / right,
+                    "%" => left % right,
+                    "<<" => left << right,
+                    ">>" => left >> right,
+                    "&" => left & right,
+                    "^" => left ^ right,
+                    "|" => left | right,
+                    "==" => left == right ? 1 : 0,
+                    "!=" => left != right ? 1 : 0,
+                    "<" => left < right ? 1 : 0,
+                    "<=" => left <= right ? 1 : 0,
+                    ">" => left > right ? 1 : 0,
+                    ">=" => left >= right ? 1 : 0,
+                    _ => throw new Exception($"Invalid enum constant expression operator '{b.Operator}'")
+                };
+            }
+
+            throw new Exception("Invalid enum constant expression");
         }
         private bool IsStartOfTypeNameInsideParen()
         {
@@ -1246,6 +1680,18 @@ namespace CInterpreterWpf
                 if (IsBasicType(CurrentToken.Type))
                 {
                     Consume();
+
+                    while (CurrentToken.Type == TokenType.Asterisk)
+                        Consume();
+
+                    return CurrentToken.Type == TokenType.RParen;
+                }
+
+                if (CurrentToken.Type == TokenType.Enum)
+                {
+                    Consume();
+                    if (CurrentToken.Type == TokenType.Identifier)
+                        Consume();
 
                     while (CurrentToken.Type == TokenType.Asterisk)
                         Consume();
@@ -1284,6 +1730,14 @@ namespace CInterpreterWpf
             else if (IsBasicType(CurrentToken.Type))
             {
                 t.Type = Consume().Value;
+            }
+            else if (CurrentToken.Type == TokenType.Enum)
+            {
+                Consume();
+                if (CurrentToken.Type == TokenType.Identifier)
+                    Consume();
+
+                t.Type = "int";
             }
             else if (CurrentToken.Type == TokenType.Identifier &&
                     _typedefs.TryGetValue(CurrentToken.Value, out var td))

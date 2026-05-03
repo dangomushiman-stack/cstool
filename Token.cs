@@ -2,19 +2,21 @@ namespace CInterpreterWpf
 {
     public enum TokenType
     {
-        Int, Char, Void, Typedef,Struct, Return, Sizeof,
+        Int, Char, Void, Typedef,Struct, Enum, Return, Sizeof,
         Short, Long, Float, Double,
-        If, Else, While, For, Do, Break, Continue,
+        If, Else, While, For, Do, Switch, Case, Default, Break, Continue,
         Identifier, Number, StringLiteral, FloatLiteral,CharLiteral,
 
         Assign, Plus, Minus, Asterisk, Slash, Percent,
-        PlusAssign, MinusAssign, AsteriskAssign, SlashAssign,
+        PlusAssign, MinusAssign, AsteriskAssign, SlashAssign, PercentAssign,
+        AmpersandAssign, BitwiseOrAssign, BitwiseXorAssign, ShiftLeftAssign, ShiftRightAssign,
         Increment, Decrement,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
+        ShiftLeft, ShiftRight, BitwiseOr, BitwiseXor, BitwiseNot,
         LogicalAnd, LogicalOr, LogicalNot,
 
         LParen, RParen, LBrace, RBrace, LBracket, RBracket,
-        Semicolon, Comma, Dot, Arrow,
+        Semicolon, Comma, Dot, Arrow, Question, Colon,
         Ampersand, EOF, Unknown
     }
 

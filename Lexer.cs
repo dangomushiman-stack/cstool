@@ -34,6 +34,8 @@ namespace CInterpreterWpf
 
             char c = CurrentChar();
 
+            if (c == '<' && Peek() == '<' && Peek(2) == '=') return AdvanceManyAndCreateToken(TokenType.ShiftLeftAssign, "<<=", 3);
+            if (c == '>' && Peek() == '>' && Peek(2) == '=') return AdvanceManyAndCreateToken(TokenType.ShiftRightAssign, ">>=", 3);
             if (c == '+' && Peek() == '+') return AdvanceTwiceAndCreateToken(TokenType.Increment, "++");
             if (c == '-' && Peek() == '-') return AdvanceTwiceAndCreateToken(TokenType.Decrement, "--");
             if (c == '-' && Peek() == '>') return AdvanceTwiceAndCreateToken(TokenType.Arrow, "->");
@@ -41,8 +43,14 @@ namespace CInterpreterWpf
             if (c == '-' && Peek() == '=') return AdvanceTwiceAndCreateToken(TokenType.MinusAssign, "-=");
             if (c == '*' && Peek() == '=') return AdvanceTwiceAndCreateToken(TokenType.AsteriskAssign, "*=");
             if (c == '/' && Peek() == '=') return AdvanceTwiceAndCreateToken(TokenType.SlashAssign, "/=");
+            if (c == '%' && Peek() == '=') return AdvanceTwiceAndCreateToken(TokenType.PercentAssign, "%=");
+            if (c == '&' && Peek() == '=') return AdvanceTwiceAndCreateToken(TokenType.AmpersandAssign, "&=");
+            if (c == '|' && Peek() == '=') return AdvanceTwiceAndCreateToken(TokenType.BitwiseOrAssign, "|=");
+            if (c == '^' && Peek() == '=') return AdvanceTwiceAndCreateToken(TokenType.BitwiseXorAssign, "^=");
             if (c == '=' && Peek() == '=') return AdvanceTwiceAndCreateToken(TokenType.Equal, "==");
             if (c == '!' && Peek() == '=') return AdvanceTwiceAndCreateToken(TokenType.NotEqual, "!=");
+            if (c == '<' && Peek() == '<') return AdvanceTwiceAndCreateToken(TokenType.ShiftLeft, "<<");
+            if (c == '>' && Peek() == '>') return AdvanceTwiceAndCreateToken(TokenType.ShiftRight, ">>");
             if (c == '<' && Peek() == '=') return AdvanceTwiceAndCreateToken(TokenType.LessEqual, "<=");
             if (c == '>' && Peek() == '=') return AdvanceTwiceAndCreateToken(TokenType.GreaterEqual, ">=");
             if (c == '&' && Peek() == '&') return AdvanceTwiceAndCreateToken(TokenType.LogicalAnd, "&&");
@@ -59,6 +67,9 @@ namespace CInterpreterWpf
                 case '<': return AdvanceAndCreateToken(TokenType.Less, "<");
                 case '>': return AdvanceAndCreateToken(TokenType.Greater, ">");
                 case '!': return AdvanceAndCreateToken(TokenType.LogicalNot, "!");
+                case '|': return AdvanceAndCreateToken(TokenType.BitwiseOr, "|");
+                case '^': return AdvanceAndCreateToken(TokenType.BitwiseXor, "^");
+                case '~': return AdvanceAndCreateToken(TokenType.BitwiseNot, "~");
                 case '(': return AdvanceAndCreateToken(TokenType.LParen, "(");
                 case ')': return AdvanceAndCreateToken(TokenType.RParen, ")");
                 case '{': return AdvanceAndCreateToken(TokenType.LBrace, "{");
@@ -68,6 +79,8 @@ namespace CInterpreterWpf
                 case ';': return AdvanceAndCreateToken(TokenType.Semicolon, ";");
                 case ',': return AdvanceAndCreateToken(TokenType.Comma, ",");
                 case '.': return AdvanceAndCreateToken(TokenType.Dot, ".");
+                case '?': return AdvanceAndCreateToken(TokenType.Question, "?");
+                case ':': return AdvanceAndCreateToken(TokenType.Colon, ":");
                 case '&': return AdvanceAndCreateToken(TokenType.Ampersand, "&");
                 case '\'': return ReadCharLiteral();
             }
@@ -80,7 +93,7 @@ namespace CInterpreterWpf
         }
 
         private char CurrentChar() => _position < _source.Length ? _source[_position] : '\0';
-        private char Peek() => _position + 1 < _source.Length ? _source[_position + 1] : '\0';
+        private char Peek(int offset = 1) => _position + offset < _source.Length ? _source[_position + offset] : '\0';
 
         private void Advance()
         {
@@ -108,6 +121,14 @@ namespace CInterpreterWpf
             var t = new Token(type, value, _line, _column);
             Advance();
             Advance();
+            return t;
+        }
+
+        private Token AdvanceManyAndCreateToken(TokenType type, string value, int count)
+        {
+            var t = new Token(type, value, _line, _column);
+            for (int i = 0; i < count; i++)
+                Advance();
             return t;
         }
 
@@ -152,15 +173,20 @@ namespace CInterpreterWpf
 
         private Token ReadCharLiteral()
         {
-            int sc = _column;
+            int sl = _line, sc = _column;
             Advance();
 
-            char c = CurrentChar();
+            if (_position >= _source.Length || CurrentChar() == '\n')
+                throw new Exception($"Unterminated char literal at line {sl}, column {sc}");
+
+            char c = ReadEscapedOrCurrentChar();
+
+            if (CurrentChar() != '\'')
+                throw new Exception($"Unterminated char literal at line {sl}, column {sc}");
+
             Advance();
 
-            if (CurrentChar() == '\'') Advance();
-
-            return new Token(TokenType.CharLiteral, c.ToString(), _line, sc);
+            return new Token(TokenType.CharLiteral, c.ToString(), sl, sc);
         }
 
         private Token ReadStringLiteral()
@@ -171,21 +197,50 @@ namespace CInterpreterWpf
             var sb = new StringBuilder();
             while (CurrentChar() != '"' && _position < _source.Length)
             {
-                if (CurrentChar() == '\\')
-                {
-                    Advance();
-                    if (CurrentChar() == 'n') sb.Append('\n');
-                    else sb.Append(CurrentChar());
-                }
-                else
-                {
-                    sb.Append(CurrentChar());
-                }
-                Advance();
+                if (CurrentChar() == '\n')
+                    throw new Exception($"Unterminated string literal at line {sl}, column {sc}");
+
+                sb.Append(ReadEscapedOrCurrentChar());
             }
 
-            if (CurrentChar() == '"') Advance();
+            if (CurrentChar() != '"')
+                throw new Exception($"Unterminated string literal at line {sl}, column {sc}");
+
+            Advance();
             return new Token(TokenType.StringLiteral, sb.ToString(), sl, sc);
+        }
+
+        private char ReadEscapedOrCurrentChar()
+        {
+            if (CurrentChar() != '\\')
+            {
+                char c = CurrentChar();
+                Advance();
+                return c;
+            }
+
+            Advance();
+            if (_position >= _source.Length)
+                return '\\';
+
+            char escaped = CurrentChar();
+            Advance();
+
+            return escaped switch
+            {
+                '0' => '\0',
+                'a' => '\a',
+                'b' => '\b',
+                'f' => '\f',
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                'v' => '\v',
+                '\\' => '\\',
+                '\'' => '\'',
+                '"' => '"',
+                _ => escaped
+            };
         }
 
         private Token ReadNumber()
@@ -252,6 +307,7 @@ namespace CInterpreterWpf
                 "double" => TokenType.Double,
                 "void" => TokenType.Void,
                 "struct" => TokenType.Struct,
+                "enum" => TokenType.Enum,
                 "typedef" => TokenType.Typedef,
                 "return" => TokenType.Return,
                 "sizeof" => TokenType.Sizeof,
@@ -260,6 +316,9 @@ namespace CInterpreterWpf
                 "while" => TokenType.While,
                 "for" => TokenType.For,
                 "do" => TokenType.Do,
+                "switch" => TokenType.Switch,
+                "case" => TokenType.Case,
+                "default" => TokenType.Default,
                 "break" => TokenType.Break,
                 "continue" => TokenType.Continue,
                 _ => TokenType.Identifier

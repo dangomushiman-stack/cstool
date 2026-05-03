@@ -131,6 +131,7 @@ namespace CInterpreterWpf
         public string Name { get; set; }
         public List<FunctionParameter> Parameters { get; } = new List<FunctionParameter>();
         public List<IASTNode> Body { get; } = new List<IASTNode>();
+        public bool IsPrototype { get; set; }
     }
 
     public class BlockNode : IASTNode
@@ -161,6 +162,11 @@ namespace CInterpreterWpf
         public bool IsArrayLengthInferred { get => TypeInfo.IsArrayLengthInferred; set => TypeInfo.IsArrayLengthInferred = value; }
         public bool IsStruct { get => TypeInfo.IsStruct; set => TypeInfo.IsStruct = value; }
         public string StructName { get => TypeInfo.StructName; set => TypeInfo.StructName = value; }
+    }
+
+    public class VarDeclListNode : IASTNode
+    {
+        public List<VarDeclNode> Declarations { get; } = new List<VarDeclNode>();
     }
 
     public class FunctionCallNode : IASTNode
@@ -223,6 +229,13 @@ namespace CInterpreterWpf
         public IASTNode Right { get; set; }
     }
 
+    public class ConditionalOpNode : IASTNode
+    {
+        public IASTNode Condition { get; set; }
+        public IASTNode TrueExpression { get; set; }
+        public IASTNode FalseExpression { get; set; }
+    }
+
     public class UnaryOpNode : IASTNode
     {
         public string Operator { get; set; }
@@ -268,10 +281,37 @@ namespace CInterpreterWpf
         public IASTNode Increment { get; set; }
         public IASTNode Body { get; set; }
     }
+
+    public class SwitchCaseNode
+    {
+        public IASTNode Value { get; set; }
+        public bool IsDefault { get; set; }
+        public List<IASTNode> Statements { get; } = new List<IASTNode>();
+    }
+
+    public class SwitchNode : IASTNode
+    {
+        public IASTNode Expression { get; set; }
+        public List<SwitchCaseNode> Cases { get; } = new List<SwitchCaseNode>();
+    }
+
     public class TypedefNode : IASTNode
     {
         public string AliasName { get; set; }
     }
+
+    public class EnumMemberDecl
+    {
+        public string Name { get; set; }
+        public int Value { get; set; }
+    }
+
+    public class EnumDeclNode : IASTNode
+    {
+        public string Name { get; set; }
+        public List<EnumMemberDecl> Members { get; } = new List<EnumMemberDecl>();
+    }
+
     public class FloatNode : IASTNode
     {
         public double Value { get; set; }

@@ -190,9 +190,18 @@ namespace CInterpreterWpf
                 }
                 else if (d is FunctionDeclNode f)
                 {
-                    if (_functions.ContainsKey(f.Name))
-                        throw new Exception($"Execution Error: duplicate function '{f.Name}'");
-                    _functions[f.Name] = f;
+                    if (_functions.TryGetValue(f.Name, out var existing))
+                    {
+                        if (!existing.IsPrototype && !f.IsPrototype)
+                            throw new Exception($"Execution Error: duplicate function '{f.Name}'");
+
+                        if (!f.IsPrototype)
+                            _functions[f.Name] = f;
+                    }
+                    else
+                    {
+                        _functions[f.Name] = f;
+                    }
                 }
             }
 
@@ -590,6 +599,9 @@ namespace CInterpreterWpf
         {
             if (!_functions.TryGetValue(call.FunctionName, out var fn))
                 throw new Exception($"Execution Error: function '{call.FunctionName}' not found");
+
+            if (fn.IsPrototype)
+                throw new Exception($"Execution Error: function '{call.FunctionName}' has no definition");
 
             if (call.Arguments.Count != fn.Parameters.Count)
                 throw new Exception($"Execution Error: function '{call.FunctionName}' expects {fn.Parameters.Count} arguments, but got {call.Arguments.Count}");
@@ -1407,8 +1419,16 @@ namespace CInterpreterWpf
             throw new Exception("Execution Error: invalid write target");
         }
 
-        private int ApplyAssignmentOperator(string op, int currentValue, int rightValue)
+        private int ApplyAssignmentOperator(string op, IASTNode left, int currentValue, int rightValue)
         {
+            if (op == "+=" || op == "-=")
+            {
+                int elementSize = GetPointeeElementSize(left);
+                int pointeeLevel;
+                if (elementSize != 4 || TryGetPointeeType(left, out _, out pointeeLevel))
+                    rightValue *= elementSize;
+            }
+
             return op switch
             {
                 "=" => rightValue,
@@ -1416,6 +1436,12 @@ namespace CInterpreterWpf
                 "-=" => currentValue - rightValue,
                 "*=" => currentValue * rightValue,
                 "/=" => currentValue / rightValue,
+                "%=" => currentValue % rightValue,
+                "&=" => currentValue & rightValue,
+                "|=" => currentValue | rightValue,
+                "^=" => currentValue ^ rightValue,
+                "<<=" => currentValue << rightValue,
+                ">>=" => currentValue >> rightValue,
                 _ => throw new Exception($"Execution Error: unsupported assignment operator '{op}'")
             };
         }
@@ -1607,11 +1633,23 @@ namespace CInterpreterWpf
                 return;
             }
 
+            if (stmt is VarDeclListNode varDeclList)
+            {
+                foreach (var declaration in varDeclList.Declarations)
+                {
+                    ExecuteStatement(declaration);
+                    if (_hasReturn || _breakRequested || _continueRequested)
+                        break;
+                }
+
+                return;
+            }
+
             if (stmt is AssignmentNode assign)
             {
                 int rightValue = Convert.ToInt32(EvaluateExpression(assign.Right));
                 int currentValue = assign.Operator == "=" ? 0 : ReadTarget(assign.Left);
-                int newValue = ApplyAssignmentOperator(assign.Operator, currentValue, rightValue);
+                int newValue = ApplyAssignmentOperator(assign.Operator, assign.Left, currentValue, rightValue);
                 WriteTarget(assign.Left, newValue);
 
                 CaptureSnapshot($"Assign: {assign.Operator}");
@@ -1706,7 +1744,7 @@ namespace CInterpreterWpf
                 {
                     if (forNode.Initializer != null)
                     {
-                        if (forNode.Initializer is AssignmentNode or VarDeclNode or PostfixOpNode or UnaryOpNode or FunctionCallNode)
+                        if (forNode.Initializer is AssignmentNode or VarDeclNode or VarDeclListNode or PostfixOpNode or UnaryOpNode or FunctionCallNode)
                             ExecuteStatement(forNode.Initializer);
                         else
                             EvaluateExpression(forNode.Initializer);
@@ -1731,6 +1769,9 @@ namespace CInterpreterWpf
                             break;
                         }
 
+                        if (_continueRequested)
+                            _continueRequested = false;
+
                         if (forNode.Increment != null)
                         {
                             if (forNode.Increment is AssignmentNode or PostfixOpNode or UnaryOpNode or FunctionCallNode)
@@ -1738,9 +1779,6 @@ namespace CInterpreterWpf
                             else
                                 EvaluateExpression(forNode.Increment);
                         }
-
-                        if (_continueRequested)
-                            _continueRequested = false;
                     }
                 }
                 finally
@@ -1749,6 +1787,64 @@ namespace CInterpreterWpf
                 }
 
                 CaptureSnapshot("For completed");
+                return;
+            }
+
+            if (stmt is SwitchNode switchNode)
+            {
+                int switchValue = Convert.ToInt32(EvaluateExpression(switchNode.Expression));
+                int startIndex = -1;
+                int defaultIndex = -1;
+
+                for (int i = 0; i < switchNode.Cases.Count; i++)
+                {
+                    var section = switchNode.Cases[i];
+                    if (section.IsDefault)
+                    {
+                        defaultIndex = i;
+                        continue;
+                    }
+
+                    int caseValue = Convert.ToInt32(EvaluateExpression(section.Value));
+                    if (caseValue == switchValue)
+                    {
+                        startIndex = i;
+                        break;
+                    }
+                }
+
+                if (startIndex < 0)
+                    startIndex = defaultIndex;
+
+                if (startIndex >= 0)
+                {
+                    EnterScope();
+                    try
+                    {
+                        for (int i = startIndex; i < switchNode.Cases.Count; i++)
+                        {
+                            foreach (var sectionStatement in switchNode.Cases[i].Statements)
+                            {
+                                ExecuteStatement(sectionStatement);
+
+                                if (_hasReturn || _breakRequested || _continueRequested)
+                                    break;
+                            }
+
+                            if (_hasReturn || _breakRequested || _continueRequested)
+                                break;
+                        }
+                    }
+                    finally
+                    {
+                        ExitScope();
+                    }
+
+                    if (_breakRequested)
+                        _breakRequested = false;
+                }
+
+                CaptureSnapshot("Switch completed");
                 return;
             }
 
@@ -1857,6 +1953,9 @@ namespace CInterpreterWpf
                 if (u.Operator == "!")
                     return Convert.ToInt32(EvaluateExpression(u.Target)) == 0 ? 1 : 0;
 
+                if (u.Operator == "~")
+                    return ~Convert.ToInt32(EvaluateExpression(u.Target));
+
                 if (u.Operator == "++" || u.Operator == "--")
                 {
                     int oldValue = ReadTarget(u.Target);
@@ -1864,6 +1963,14 @@ namespace CInterpreterWpf
                     WriteTarget(u.Target, newValue);
                     return newValue;
                 }
+            }
+
+            if (expr is ConditionalOpNode conditional)
+            {
+                int conditionValue = Convert.ToInt32(EvaluateExpression(conditional.Condition));
+                return conditionValue != 0
+                    ? EvaluateExpression(conditional.TrueExpression)
+                    : EvaluateExpression(conditional.FalseExpression);
             }
 
             if (expr is BinaryOpNode b)
@@ -1904,6 +2011,11 @@ namespace CInterpreterWpf
                     "*" => left * right,
                     "/" => left / right,
                     "%" => left % right,
+                    "<<" => left << right,
+                    ">>" => left >> right,
+                    "&" => left & right,
+                    "^" => left ^ right,
+                    "|" => left | right,
                     "==" => left == right ? 1 : 0,
                     "!=" => left != right ? 1 : 0,
                     "<" => left < right ? 1 : 0,
