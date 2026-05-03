@@ -97,6 +97,9 @@ namespace CInterpreterWpf
         public int PointerLevel { get => TypeInfo.PointerLevel; set => TypeInfo.PointerLevel = value; }
         public bool IsStruct { get => TypeInfo.IsStruct; set => TypeInfo.IsStruct = value; }
         public string StructName { get => TypeInfo.StructName; set => TypeInfo.StructName = value; }
+        public bool IsArray { get => TypeInfo.IsArray; set => TypeInfo.IsArray = value; }
+        public int ArrayLength { get => TypeInfo.ArrayLength; set => TypeInfo.ArrayLength = value; }
+        public bool IsArrayLengthInferred { get => TypeInfo.IsArrayLengthInferred; set => TypeInfo.IsArrayLengthInferred = value; }
     }
 
     public class StructDeclNode : IASTNode

@@ -254,11 +254,17 @@ namespace CInterpreterWpf
             CaptureSnapshot($"GlobalVarDecl: {v.VarName}");
         }
 
-        private int GetStructFieldSize(StructFieldDecl field)
+        private int GetStructFieldElementSize(StructFieldDecl field)
         {
             if (field.IsPointer) return 4;
             if (field.IsStruct) return GetStructSize(field.StructName);
             return field.Type == "char" ? 1 : 4;
+        }
+
+        private int GetStructFieldSize(StructFieldDecl field)
+        {
+            int elementSize = GetStructFieldElementSize(field);
+            return field.IsArray ? elementSize * field.ArrayLength : elementSize;
         }
 
         private int GetStructSize(string structName)
@@ -320,7 +326,11 @@ namespace CInterpreterWpf
                 {
                     var elem = structInit.Elements[i];
 
-                    if (field.IsStruct && !field.IsPointer)
+                    if (field.IsArray)
+                    {
+                        throw new Exception("Execution Error: struct field array initializer is not supported yet");
+                    }
+                    else if (field.IsStruct && !field.IsPointer)
                     {
                         var nestedInfo = new VarInfo
                         {
@@ -500,6 +510,28 @@ namespace CInterpreterWpf
                 if (info.IsArray && info.IsStruct)
                 {
                     structName = info.StructName;
+                    return true;
+                }
+            }
+
+            if (access.Target is StructMemberAccessNode sm &&
+                TryGetStructValueInfo(sm.Target, out string baseStructName, out _))
+            {
+                var field = GetStructFieldInfo(baseStructName, sm.MemberName).field;
+                if (field.IsArray && field.IsStruct)
+                {
+                    structName = field.StructName;
+                    return true;
+                }
+            }
+
+            if (access.Target is StructPointerMemberAccessNode spm &&
+                TryGetStructPointerType(spm.Target, out string ptrStructName))
+            {
+                var field = GetStructFieldInfo(ptrStructName, spm.MemberName).field;
+                if (field.IsArray && field.IsStruct)
+                {
+                    structName = field.StructName;
                     return true;
                 }
             }
@@ -857,7 +889,7 @@ namespace CInterpreterWpf
                 {
                     var field = GetStructFieldInfo(baseStructName, member.MemberName).field;
                     type = field.Type;
-                    pointerLevel = Math.Max(0, field.PointerLevel - 1);
+                    pointerLevel = field.IsArray ? field.PointerLevel : Math.Max(0, field.PointerLevel - 1);
                     return true;
                 }
             }
@@ -868,7 +900,7 @@ namespace CInterpreterWpf
                 {
                     var field = GetStructFieldInfo(structName, pointerMember.MemberName).field;
                     type = field.Type;
-                    pointerLevel = Math.Max(0, field.PointerLevel - 1);
+                    pointerLevel = field.IsArray ? field.PointerLevel : Math.Max(0, field.PointerLevel - 1);
                     return true;
                 }
             }
@@ -974,6 +1006,32 @@ namespace CInterpreterWpf
                 return baseInfo.Address + index * baseInfo.ElementSize;
             }
 
+            if (access.Target is StructMemberAccessNode memberAccess &&
+                TryGetStructValueInfo(memberAccess.Target, out string baseStructName, out _))
+            {
+                var field = GetStructFieldInfo(baseStructName, memberAccess.MemberName).field;
+                if (field.IsArray)
+                {
+                    if (index < 0 || index >= field.ArrayLength)
+                        throw new Exception($"Execution Error: array index out of range: {memberAccess.MemberName}[{index}]");
+
+                    return baseAddr + index * GetStructFieldElementSize(field);
+                }
+            }
+
+            if (access.Target is StructPointerMemberAccessNode pointerMemberAccess &&
+                TryGetStructPointerType(pointerMemberAccess.Target, out string structName))
+            {
+                var field = GetStructFieldInfo(structName, pointerMemberAccess.MemberName).field;
+                if (field.IsArray)
+                {
+                    if (index < 0 || index >= field.ArrayLength)
+                        throw new Exception($"Execution Error: array index out of range: {pointerMemberAccess.MemberName}[{index}]");
+
+                    return baseAddr + index * GetStructFieldElementSize(field);
+                }
+            }
+
             int elementSize = GetPointeeElementSize(access.Target);
             return baseAddr + index * elementSize;
         }
@@ -1000,6 +1058,8 @@ namespace CInterpreterWpf
                 if (TryGetStructValueInfo(memberAccess.Target, out string baseStructName, out _))
                 {
                     var field = GetStructFieldInfo(baseStructName, memberAccess.MemberName).field;
+                    if (field.IsArray)
+                        return addr;
                     if (field.IsStruct && !field.IsPointer)
                         return addr;
                     return ReadScalarAtAddress(field.Type, field.IsPointer, addr);
@@ -1015,6 +1075,8 @@ namespace CInterpreterWpf
                 if (TryGetStructPointerType(pointerMemberAccess.Target, out string structName))
                 {
                     var field = GetStructFieldInfo(structName, pointerMemberAccess.MemberName).field;
+                    if (field.IsArray)
+                        return addr;
                     if (field.IsStruct && !field.IsPointer)
                         return addr;
                     return ReadScalarAtAddress(field.Type, field.IsPointer, addr);
@@ -1075,6 +1137,8 @@ namespace CInterpreterWpf
                 if (TryGetStructValueInfo(memberAccess.Target, out string baseStructName, out _))
                 {
                     var field = GetStructFieldInfo(baseStructName, memberAccess.MemberName).field;
+                    if (field.IsArray)
+                        throw new Exception("Execution Error: cannot assign to array field directly");
                     if (field.IsStruct && !field.IsPointer)
                         throw new Exception("Execution Error: cannot assign to struct field as scalar directly");
                     WriteScalarAtAddress(field.Type, field.IsPointer, addr, value);
@@ -1091,6 +1155,8 @@ namespace CInterpreterWpf
                 if (TryGetStructPointerType(pointerMemberAccess.Target, out string structName))
                 {
                     var field = GetStructFieldInfo(structName, pointerMemberAccess.MemberName).field;
+                    if (field.IsArray)
+                        throw new Exception("Execution Error: cannot assign to array field directly");
                     if (field.IsStruct && !field.IsPointer)
                         throw new Exception("Execution Error: cannot assign to struct field as scalar directly");
                     WriteScalarAtAddress(field.Type, field.IsPointer, addr, value);

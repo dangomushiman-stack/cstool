@@ -344,6 +344,27 @@ namespace CInterpreterWpf
             field.PointerLevel += ConsumePointerDeclarators();
 
             field.Name = Expect(TokenType.Identifier).Value;
+
+            if (CurrentToken.Type == TokenType.LBracket)
+            {
+                if (field.IsPointer)
+                    throw new Exception("Pointer arrays are not supported yet");
+
+                Consume();
+                if (CurrentToken.Type == TokenType.RBracket)
+                {
+                    throw new Exception("Struct field array length may not be omitted");
+                }
+
+                var lengthNode = ParseExpression();
+                if (lengthNode is not NumberNode len || len.Value <= 0)
+                    throw new Exception("Struct field array length must be a positive integer literal");
+
+                field.IsArray = true;
+                field.ArrayLength = len.Value;
+                Expect(TokenType.RBracket);
+            }
+
             Expect(TokenType.Semicolon);
             return field;
         }
