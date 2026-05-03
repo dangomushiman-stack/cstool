@@ -1056,6 +1056,9 @@ namespace CInterpreterWpf
 
         private IASTNode ParseUnary()
         {
+            if (CurrentToken.Type == TokenType.Sizeof)
+                return ParseSizeOfExpression();
+
             if (CurrentToken.Type == TokenType.LParen && IsStartOfTypeNameInsideParen())
                 return ParseCastExpression();
 
@@ -1093,6 +1096,28 @@ namespace CInterpreterWpf
             }
 
             return ParsePostfix();
+        }
+
+        private IASTNode ParseSizeOfExpression()
+        {
+            Expect(TokenType.Sizeof);
+
+            if (CurrentToken.Type == TokenType.LParen && IsStartOfTypeNameInsideParen())
+            {
+                Expect(TokenType.LParen);
+                var typeInfo = ParseTypeNameForCast();
+                Expect(TokenType.RParen);
+
+                return new SizeOfNode
+                {
+                    TypeInfo = typeInfo
+                };
+            }
+
+            return new SizeOfNode
+            {
+                Expression = ParseUnary()
+            };
         }
 
         private IASTNode ParsePostfix()
@@ -1158,7 +1183,13 @@ namespace CInterpreterWpf
         private IASTNode ParsePrimary()
         {
             if (CurrentToken.Type == TokenType.Number)
-                return new NumberNode { Value = int.Parse(Consume().Value) };
+            {
+                string value = Consume().Value;
+                int parsed = value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                    ? Convert.ToInt32(value.Substring(2), 16)
+                    : int.Parse(value);
+                return new NumberNode { Value = parsed };
+            }
 
             if (CurrentToken.Type == TokenType.FloatLiteral)
                 return new FloatNode { Value = double.Parse(Consume().Value) };

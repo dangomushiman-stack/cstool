@@ -282,4 +282,11 @@ namespace CInterpreterWpf
         public CTypeInfo TargetTypeInfo { get; set; } = new CTypeInfo();
         public IASTNode Expression { get; set; }
     }
+
+    public class SizeOfNode : IASTNode
+    {
+        public CTypeInfo TypeInfo { get; set; }
+        public IASTNode Expression { get; set; }
+        public bool IsTypeName => TypeInfo != null;
+    }
 }

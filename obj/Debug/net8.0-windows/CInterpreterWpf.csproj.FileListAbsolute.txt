@@ -1,4 +1,3 @@
-D:\git_repo\cstool\CInterpreter\CInterpreterWpf\bin\Debug\net8.0-windows\CInterpreterWpf.exe
 D:\git_repo\cstool\CInterpreter\CInterpreterWpf\bin\Debug\net8.0-windows\CInterpreterWpf.deps.json
 D:\git_repo\cstool\CInterpreter\CInterpreterWpf\bin\Debug\net8.0-windows\CInterpreterWpf.runtimeconfig.json
 D:\git_repo\cstool\CInterpreter\CInterpreterWpf\bin\Debug\net8.0-windows\CInterpreterWpf.dll

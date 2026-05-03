@@ -123,6 +123,26 @@ namespace CInterpreterWpf
                 {
                     while (_position < _source.Length && CurrentChar() != '\n') Advance();
                 }
+                else if (CurrentChar() == '/' && Peek() == '*')
+                {
+                    Advance();
+                    Advance();
+
+                    while (_position < _source.Length)
+                    {
+                        if (CurrentChar() == '*' && Peek() == '/')
+                        {
+                            Advance();
+                            Advance();
+                            break;
+                        }
+
+                        Advance();
+                    }
+
+                    if (_position >= _source.Length)
+                        throw new Exception("Unterminated block comment");
+                }
                 else
                 {
                     break;
@@ -174,6 +194,25 @@ namespace CInterpreterWpf
             var sb = new StringBuilder();
             bool hasDot = false;
 
+            if (CurrentChar() == '0' && (Peek() == 'x' || Peek() == 'X'))
+            {
+                sb.Append(CurrentChar());
+                Advance();
+                sb.Append(CurrentChar());
+                Advance();
+
+                while (_position < _source.Length && IsHexDigit(CurrentChar()))
+                {
+                    sb.Append(CurrentChar());
+                    Advance();
+                }
+
+                if (sb.Length == 2)
+                    return new Token(TokenType.Unknown, sb.ToString(), _line, sc);
+
+                return new Token(TokenType.Number, sb.ToString(), _line, sc);
+            }
+
             // 数字、またはまだ一度も出てきていない小数点を許容
             while (_position < _source.Length && (char.IsDigit(CurrentChar()) || (!hasDot && CurrentChar() == '.')))
             {
@@ -183,6 +222,13 @@ namespace CInterpreterWpf
             }
 
             return new Token(hasDot ? TokenType.FloatLiteral : TokenType.Number, sb.ToString(), _line, sc);
+        }
+
+        private static bool IsHexDigit(char c)
+        {
+            return char.IsDigit(c) ||
+                   (c >= 'a' && c <= 'f') ||
+                   (c >= 'A' && c <= 'F');
         }
 
         private Token ReadIdentifierOrKeyword()
@@ -208,6 +254,7 @@ namespace CInterpreterWpf
                 "struct" => TokenType.Struct,
                 "typedef" => TokenType.Typedef,
                 "return" => TokenType.Return,
+                "sizeof" => TokenType.Sizeof,
                 "if" => TokenType.If,
                 "else" => TokenType.Else,
                 "while" => TokenType.While,

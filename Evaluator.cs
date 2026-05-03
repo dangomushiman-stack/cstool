@@ -147,6 +147,18 @@ namespace CInterpreterWpf
             return info;
         }
 
+        private VarInfo CreateVarInfoFromStructField(StructFieldDecl field, int address)
+        {
+            var info = new VarInfo
+            {
+                Address = address,
+                StructSize = field.IsStruct ? GetStructSize(field.StructName) : 0
+            };
+
+            CopyTypeInfo(info.TypeInfo, field?.TypeInfo);
+            return info;
+        }
+
         public void Evaluate(ProgramNode program)
         {
             _functions.Clear();
@@ -328,7 +340,8 @@ namespace CInterpreterWpf
 
                     if (field.IsArray)
                     {
-                        throw new Exception("Execution Error: struct field array initializer is not supported yet");
+                        var arrayInfo = CreateVarInfoFromStructField(field, fieldAddr);
+                        InitializeArray(arrayInfo, elem);
                     }
                     else if (field.IsStruct && !field.IsPointer)
                     {
@@ -851,6 +864,200 @@ namespace CInterpreterWpf
             };
         }
 
+        private int GetSizeOfType(CTypeInfo typeInfo)
+        {
+            if (typeInfo == null)
+                throw new Exception("Execution Error: invalid sizeof type");
+
+            if (typeInfo.IsArray)
+            {
+                int elementSize = typeInfo.IsStruct && !typeInfo.IsPointer
+                    ? GetStructSize(typeInfo.StructName)
+                    : GetTypeElementSize(typeInfo.Type, typeInfo.PointerLevel > 0);
+                return elementSize * typeInfo.ArrayLength;
+            }
+
+            if (typeInfo.PointerLevel > 0)
+                return 4;
+
+            if (typeInfo.IsStruct)
+                return GetStructSize(typeInfo.StructName);
+
+            return GetTypeElementSize(typeInfo.Type, false);
+        }
+
+        private bool TryGetStructValueType(IASTNode expr, out string structName)
+        {
+            if (expr is VariableNode v && Env.TryGetValue(v.Name, out var info))
+            {
+                if (info.IsStruct && !info.IsPointer)
+                {
+                    structName = info.StructName;
+                    return true;
+                }
+            }
+
+            if (expr is ArrayAccessNode aa)
+                return TryGetArrayAccessStructTypeNoEval(aa, out structName);
+
+            if (expr is StructMemberAccessNode sm &&
+                TryGetStructValueType(sm.Target, out string baseStructName))
+            {
+                var field = GetStructFieldInfo(baseStructName, sm.MemberName).field;
+                if (field.IsStruct && !field.IsPointer)
+                {
+                    structName = field.StructName;
+                    return true;
+                }
+            }
+
+            if (expr is StructPointerMemberAccessNode spm &&
+                TryGetStructPointerType(spm.Target, out string pointerStructName))
+            {
+                var field = GetStructFieldInfo(pointerStructName, spm.MemberName).field;
+                if (field.IsStruct && !field.IsPointer)
+                {
+                    structName = field.StructName;
+                    return true;
+                }
+            }
+
+            if (expr is UnaryOpNode deref && deref.Operator == "*" &&
+                TryGetStructPointerType(deref.Target, out structName))
+                return true;
+
+            structName = null;
+            return false;
+        }
+
+        private bool TryGetArrayAccessStructTypeNoEval(ArrayAccessNode access, out string structName)
+        {
+            if (access.Target is VariableNode v &&
+                Env.TryGetValue(v.Name, out var info) &&
+                info.IsArray && info.IsStruct)
+            {
+                structName = info.StructName;
+                return true;
+            }
+
+            if (access.Target is StructMemberAccessNode sm &&
+                TryGetStructValueType(sm.Target, out string baseStructName))
+            {
+                var field = GetStructFieldInfo(baseStructName, sm.MemberName).field;
+                if (field.IsArray && field.IsStruct)
+                {
+                    structName = field.StructName;
+                    return true;
+                }
+            }
+
+            if (access.Target is StructPointerMemberAccessNode spm &&
+                TryGetStructPointerType(spm.Target, out string ptrStructName))
+            {
+                var field = GetStructFieldInfo(ptrStructName, spm.MemberName).field;
+                if (field.IsArray && field.IsStruct)
+                {
+                    structName = field.StructName;
+                    return true;
+                }
+            }
+
+            if (TryGetStructPointerType(access.Target, out structName))
+                return true;
+
+            structName = null;
+            return false;
+        }
+
+        private int GetSizeOfExpression(IASTNode expr)
+        {
+            if (expr is VariableNode varNode)
+            {
+                var info = Env[varNode.Name];
+                return info.Size;
+            }
+
+            if (expr is StructMemberAccessNode memberAccess &&
+                TryGetStructValueType(memberAccess.Target, out string baseStructName))
+            {
+                var field = GetStructFieldInfo(baseStructName, memberAccess.MemberName).field;
+                return GetStructFieldSize(field);
+            }
+
+            if (expr is StructPointerMemberAccessNode pointerMemberAccess &&
+                TryGetStructPointerType(pointerMemberAccess.Target, out string structName))
+            {
+                var field = GetStructFieldInfo(structName, pointerMemberAccess.MemberName).field;
+                return GetStructFieldSize(field);
+            }
+
+            if (expr is ArrayAccessNode arrayAccess)
+            {
+                if (TryGetArrayAccessStructTypeNoEval(arrayAccess, out string elementStructName))
+                    return GetStructSize(elementStructName);
+
+                if (arrayAccess.Target is VariableNode baseVar &&
+                    Env.TryGetValue(baseVar.Name, out var baseInfo) &&
+                    baseInfo.IsArray)
+                    return baseInfo.ElementSize;
+
+                if (arrayAccess.Target is StructMemberAccessNode memberArray &&
+                    TryGetStructValueType(memberArray.Target, out string memberBaseStructName))
+                {
+                    var field = GetStructFieldInfo(memberBaseStructName, memberArray.MemberName).field;
+                    if (field.IsArray)
+                        return GetStructFieldElementSize(field);
+                }
+
+                if (arrayAccess.Target is StructPointerMemberAccessNode pointerMemberArray &&
+                    TryGetStructPointerType(pointerMemberArray.Target, out string pointerBaseStructName))
+                {
+                    var field = GetStructFieldInfo(pointerBaseStructName, pointerMemberArray.MemberName).field;
+                    if (field.IsArray)
+                        return GetStructFieldElementSize(field);
+                }
+
+                if (TryGetPointeeType(arrayAccess.Target, out string elementType, out int elementPointerLevel))
+                    return GetTypeElementSize(elementType, elementPointerLevel > 0);
+
+                return 4;
+            }
+
+            if (expr is UnaryOpNode unary)
+            {
+                if (unary.Operator == "&")
+                    return 4;
+
+                if (unary.Operator == "*")
+                {
+                    if (TryGetStructPointerType(unary.Target, out string pointeeStructName))
+                        return GetStructSize(pointeeStructName);
+
+                    if (TryGetPointeeType(unary.Target, out string pointeeType, out int pointeeLevel))
+                        return GetTypeElementSize(pointeeType, pointeeLevel > 0);
+
+                    return 4;
+                }
+
+                return GetSizeOfExpression(unary.Target);
+            }
+
+            if (expr is CastNode cast)
+                return GetSizeOfType(cast.TargetTypeInfo);
+
+            if (expr is FunctionCallNode call &&
+                _functions.TryGetValue(call.FunctionName, out var fn))
+                return GetSizeOfType(fn.ReturnTypeInfo);
+
+            if (expr is StringNode str)
+                return Encoding.UTF8.GetByteCount(str.Value) + 1;
+
+            if (expr is SizeOfNode)
+                return 4;
+
+            return 4;
+        }
+
         private void BindVariable(string name, VarInfo info)
         {
             if (_scopes.Count == 0)
@@ -1231,15 +1438,13 @@ namespace CInterpreterWpf
 
             if (initializer is ArrayInitializerNode arrayInit)
             {
-                if (arrayInit.Elements.Count > info.ArrayLength)
-                    throw new Exception($"Execution Error: too many initializer elements for array at 0x{info.Address:X4}");
+                InitializeArrayElements(info, arrayInit.Elements);
+                return;
+            }
 
-                for (int i = 0; i < arrayInit.Elements.Count; i++)
-                {
-                    int value = Convert.ToInt32(EvaluateExpression(arrayInit.Elements[i]));
-                    int addr = info.Address + i * info.ElementSize;
-                    WriteScalarAtAddress(info.Type, false, addr, value);
-                }
+            if (initializer is StructInitializerNode structInit)
+            {
+                InitializeArrayElements(info, structInit.Elements);
                 return;
             }
 
@@ -1255,6 +1460,39 @@ namespace CInterpreterWpf
             }
 
             throw new Exception("Execution Error: invalid array initializer");
+        }
+
+        private void InitializeArrayElements(VarInfo info, List<IASTNode> elements)
+        {
+            if (elements.Count > info.ArrayLength)
+                throw new Exception($"Execution Error: too many initializer elements for array at 0x{info.Address:X4}");
+
+            for (int i = 0; i < elements.Count; i++)
+            {
+                int addr = info.Address + i * info.ElementSize;
+                var elem = elements[i];
+
+                if (info.IsStruct && !info.IsPointer)
+                {
+                    var elementInfo = new VarInfo
+                    {
+                        Address = addr,
+                        StructSize = info.StructSize
+                    };
+                    elementInfo.TypeInfo.Type = "struct";
+                    elementInfo.TypeInfo.IsPointer = false;
+                    elementInfo.TypeInfo.IsArray = false;
+                    elementInfo.TypeInfo.ArrayLength = 0;
+                    elementInfo.TypeInfo.IsStruct = true;
+                    elementInfo.TypeInfo.StructName = info.StructName;
+
+                    InitializeStruct(elementInfo, elem);
+                    continue;
+                }
+
+                int value = Convert.ToInt32(EvaluateExpression(elem));
+                WriteScalarAtAddress(info.Type, info.IsPointer, addr, value);
+            }
         }
 
         private void ExecuteScopedStatement(IASTNode stmt)
@@ -1282,10 +1520,17 @@ namespace CInterpreterWpf
                     args.Add(EvaluateExpression(call.Arguments[i]));
 
                 int idx = 0;
-                string output = Regex.Replace(fmt, @"%[dc]", m =>
+                string output = Regex.Replace(fmt, @"%[dcsxp]", m =>
                 {
                     var v = args[idx++];
-                    return m.Value == "%c" ? ((char)Convert.ToInt32(v)).ToString() : v.ToString();
+                    return m.Value switch
+                    {
+                        "%c" => ((char)Convert.ToInt32(v)).ToString(),
+                        "%s" => ReadCString(Convert.ToInt32(v)),
+                        "%x" => Convert.ToInt32(v).ToString("x"),
+                        "%p" => $"0x{Convert.ToInt32(v):x8}",
+                        _ => v.ToString()
+                    };
                 });
 
                 _stdout(output.Replace("\n", Environment.NewLine));
@@ -1533,6 +1778,11 @@ namespace CInterpreterWpf
         private object EvaluateExpression(IASTNode expr)
         {
 
+
+            if (expr is SizeOfNode sizeOf)
+                return sizeOf.IsTypeName
+                    ? GetSizeOfType(sizeOf.TypeInfo)
+                    : GetSizeOfExpression(sizeOf.Expression);
 
             if (expr is CastNode cast)
             {
