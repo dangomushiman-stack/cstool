@@ -496,22 +496,10 @@ namespace CInterpreterWpf
 
             if (CurrentToken.Type == TokenType.LBracket)
             {
-                if (field.IsPointer)
-                    throw new Exception("Pointer arrays are not supported yet");
-
-                Consume();
-                if (CurrentToken.Type == TokenType.RBracket)
-                {
-                    throw new Exception("Struct field array length may not be omitted");
-                }
-
-                var lengthNode = ParseExpression();
-                if (lengthNode is not NumberNode len || len.Value <= 0)
-                    throw new Exception("Struct field array length must be a positive integer literal");
-
-                field.IsArray = true;
-                field.ArrayLength = len.Value;
-                Expect(TokenType.RBracket);
+                ParseArrayDimensions(
+                    field.TypeInfo,
+                    allowOmittedFirstLength: false,
+                    "Struct field array length may not be omitted");
             }
 
             Expect(TokenType.Semicolon);
@@ -639,7 +627,43 @@ namespace CInterpreterWpf
             if (CurrentToken.Type == TokenType.Identifier)
                 param.Name = Consume().Value;
 
+            ParseFunctionParameterArraySuffix(param);
+
             return param;
+        }
+
+        private void ParseFunctionParameterArraySuffix(FunctionParameter param)
+        {
+            if (CurrentToken.Type != TokenType.LBracket)
+                return;
+
+            bool first = true;
+            while (CurrentToken.Type == TokenType.LBracket)
+            {
+                Consume();
+                if (CurrentToken.Type == TokenType.RBracket)
+                {
+                    if (!first)
+                        throw new Exception("Array length may be omitted only for the first parameter dimension");
+                    param.TypeInfo.ArrayDimensions.Add(0);
+                    Consume();
+                }
+                else
+                {
+                    var lengthNode = ParseExpression();
+                    if (lengthNode is not NumberNode len || len.Value <= 0)
+                        throw new Exception("Array length must be a positive integer literal");
+
+                    param.TypeInfo.ArrayDimensions.Add(len.Value);
+
+                    Expect(TokenType.RBracket);
+                }
+
+                first = false;
+            }
+
+            // In function parameters, C adjusts T name[] and T name[N] to T *name.
+            param.PointerLevel += 1;
         }
 
         private IASTNode ParseStatement()
@@ -696,10 +720,16 @@ namespace CInterpreterWpf
             if (CurrentToken.Type == TokenType.Return)
             {
                 Consume();
-                var r = new ReturnNode { Value = ParseExpression() };
+                var r = new ReturnNode
+                {
+                    Value = CurrentToken.Type == TokenType.Semicolon ? null : ParseExpression()
+                };
                 Expect(TokenType.Semicolon);
                 return r;
             }
+
+            if (CurrentToken.Type == TokenType.Asterisk)
+                return ParseAssignmentStatement(true);
 
             if (IsStartOfAssignment())
                 return ParseAssignmentStatement(true);
@@ -727,9 +757,7 @@ namespace CInterpreterWpf
                 var v = new VarDeclNode();
                 ApplyTypeInfo(v, baseType);
 
-                v.PointerLevel += ConsumePointerDeclarators();
-                v.VarName = Expect(TokenType.Identifier).Value;
-
+                ParseVariableDeclarator(v);
                 ParseVariableDeclaratorSuffix(v);
                 list.Declarations.Add(v);
 
@@ -743,6 +771,22 @@ namespace CInterpreterWpf
                 Expect(TokenType.Semicolon);
 
             return list.Declarations.Count == 1 ? list.Declarations[0] : list;
+        }
+
+        private void ParseVariableDeclarator(VarDeclNode v)
+        {
+            if (CurrentToken.Type == TokenType.LParen && PeekToken().Type == TokenType.Asterisk)
+            {
+                Consume();
+                v.PointerLevel += ConsumePointerDeclarators();
+                v.VarName = Expect(TokenType.Identifier).Value;
+                Expect(TokenType.RParen);
+                ParsePointerArrayDimensions(v.TypeInfo);
+                return;
+            }
+
+            v.PointerLevel += ConsumePointerDeclarators();
+            v.VarName = Expect(TokenType.Identifier).Value;
         }
 
         private CTypeInfo ParseDeclarationBaseType()
@@ -785,26 +829,10 @@ namespace CInterpreterWpf
         {
             if (CurrentToken.Type == TokenType.LBracket)
             {
-                if (v.IsPointer) throw new Exception("Pointer arrays are not supported yet");
-
-                Consume();
-                if (CurrentToken.Type == TokenType.RBracket)
-                {
-                    v.IsArray = true;
-                    v.IsArrayLengthInferred = true;
-                    v.ArrayLength = 0;
-                    Consume();
-                }
-                else
-                {
-                    var lengthNode = ParseExpression();
-                    if (lengthNode is not NumberNode len || len.Value <= 0)
-                        throw new Exception("Array length must be a positive integer literal");
-
-                    v.IsArray = true;
-                    v.ArrayLength = len.Value;
-                    Expect(TokenType.RBracket);
-                }
+                ParseArrayDimensions(
+                    v.TypeInfo,
+                    allowOmittedFirstLength: true,
+                    "Array length may be omitted only for the first dimension");
 
                 if (CurrentToken.Type == TokenType.Assign)
                 {
@@ -838,6 +866,61 @@ namespace CInterpreterWpf
                 {
                     v.Initializer = ParseExpression();
                 }
+            }
+        }
+
+        private void ParsePointerArrayDimensions(CTypeInfo typeInfo)
+        {
+            if (CurrentToken.Type != TokenType.LBracket)
+                throw new Exception("Pointer-to-array declarator requires array dimensions");
+
+            typeInfo.ArrayDimensions.Add(0);
+            while (CurrentToken.Type == TokenType.LBracket)
+            {
+                Consume();
+                if (CurrentToken.Type == TokenType.RBracket)
+                    throw new Exception("Pointer-to-array dimension must be a positive integer literal");
+
+                var lengthNode = ParseExpression();
+                if (lengthNode is not NumberNode len || len.Value <= 0)
+                    throw new Exception("Pointer-to-array dimension must be a positive integer literal");
+
+                typeInfo.ArrayDimensions.Add(len.Value);
+                Expect(TokenType.RBracket);
+            }
+        }
+
+        private void ParseArrayDimensions(CTypeInfo typeInfo, bool allowOmittedFirstLength, string omittedLengthError)
+        {
+            bool first = true;
+            while (CurrentToken.Type == TokenType.LBracket)
+            {
+                Consume();
+                if (CurrentToken.Type == TokenType.RBracket)
+                {
+                    if (!allowOmittedFirstLength || !first)
+                        throw new Exception(omittedLengthError);
+
+                    typeInfo.IsArray = true;
+                    typeInfo.IsArrayLengthInferred = true;
+                    typeInfo.ArrayLength = 0;
+                    typeInfo.ArrayDimensions.Add(0);
+                    Consume();
+                }
+                else
+                {
+                    var lengthNode = ParseExpression();
+                    if (lengthNode is not NumberNode len || len.Value <= 0)
+                        throw new Exception("Array length must be a positive integer literal");
+
+                    typeInfo.IsArray = true;
+                    if (first)
+                        typeInfo.ArrayLength = len.Value;
+                    typeInfo.ArrayDimensions.Add(len.Value);
+                    Expect(TokenType.RBracket);
+                }
+
+                first = false;
             }
         }
 
@@ -877,7 +960,7 @@ namespace CInterpreterWpf
                 if (CurrentToken.Type == TokenType.Asterisk)
                 {
                     Consume();
-                    ParseAssignableTarget();
+                    ParseUnary();
                 }
                 else
                 {
@@ -983,17 +1066,25 @@ namespace CInterpreterWpf
 
             if (CurrentToken.Type != TokenType.RBrace)
             {
-                init.Elements.Add(ParseExpression());
+                init.Elements.Add(ParseArrayInitializerElement());
                 while (CurrentToken.Type == TokenType.Comma)
                 {
                     Consume();
                     if (CurrentToken.Type == TokenType.RBrace) break;
-                    init.Elements.Add(ParseExpression());
+                    init.Elements.Add(ParseArrayInitializerElement());
                 }
             }
 
             Expect(TokenType.RBrace);
             return init;
+        }
+
+        private IASTNode ParseArrayInitializerElement()
+        {
+            if (CurrentToken.Type == TokenType.LBrace)
+                return ParseArrayInitializer();
+
+            return ParseExpression();
         }
 
         private IASTNode ParseAssignmentStatement(bool expectSemicolon)
@@ -1006,7 +1097,7 @@ namespace CInterpreterWpf
                 left = new UnaryOpNode
                 {
                     Operator = "*",
-                    Target = ParseAssignableTarget()
+                    Target = ParseUnary()
                 };
             }
             else
@@ -1569,6 +1660,12 @@ namespace CInterpreterWpf
 
             if (CurrentToken.Type == TokenType.Identifier)
             {
+                if (CurrentToken.Value == "NULL")
+                {
+                    Consume();
+                    return new NumberNode { Value = 0 };
+                }
+
                 if (_enumConstants.TryGetValue(CurrentToken.Value, out int enumValue))
                 {
                     Consume();

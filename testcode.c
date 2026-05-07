@@ -17,6 +17,13 @@ typedef enum {
 
 int proto_add(int, int);
 
+void void_return_test(int *value)
+{
+    *value += 1;
+    return;
+    *value += 100;
+}
+
 /*
  * Block comments are ignored by the lexer.
  * They can span multiple lines.
@@ -27,6 +34,84 @@ Point *next_ptr( Point *p) {
 
 Point *head(Point *p) {
     return p;
+}
+
+void reverse_string(char *str) {
+    if (str == NULL) return;
+
+    char *end = str;
+    char temp;
+
+    while (*end != '\0') {
+        end++;
+    }
+    end--;
+
+    while (str < end) {
+        temp = *str;
+        *str = *end;
+        *end = temp;
+
+        str++;
+        end--;
+    }
+}
+
+int my_strlen(char *s) {
+    char *p = s;
+    while (*p != '\0') {
+        p++;
+    }
+
+    return p - s;
+}
+
+void my_strcpy(char *dst, char *src) {
+    while (*src != '\0') {
+        *dst = *src;
+        dst++;
+        src++;
+    }
+
+    *dst = '\0';
+}
+
+int sum_array_param(int values[3]) {
+    return values[0] + values[1] + values[2];
+}
+
+void bump_array_param(int values[]) {
+    values[1] += 10;
+}
+
+char first_char_param(char text[]) {
+    return text[0];
+}
+
+int argv_name_score(char *argv[]) {
+    return my_strlen(argv[0]) + my_strlen(argv[1]) + argv[2][0];
+}
+
+int argv_double_score(char **argv) {
+    return my_strlen(argv[1]) + argv[2][1];
+}
+
+int sum_matrix_param(int values[][3]) {
+    return values[0][0] + values[0][1] + values[0][2] + values[1][0] + values[1][1] + values[1][2];
+}
+
+int bump_matrix_param(int values[][3]) {
+    values[0][2] += values[1][1];
+    return values[0][2] + values[1][2];
+}
+
+int sum_cube_param(int values[][3][4]) {
+    return values[0][0][0] + values[1][2][3];
+}
+
+int bump_cube_param(int values[][3][4]) {
+    values[1][1][2] += 100;
+    return values[1][1][2];
 }
 
 
@@ -87,6 +172,27 @@ int main() {
     printf("%d %d\n", foo()->x, foo()->y);   // foo が struct Point* を返すなら可
     printf("%d\n", next_ptr(p)->x);
     printf("%d\n", head(p)->y);
+    int pointer_nums[3] = {11, 22, 33};
+    int *ip = pointer_nums;
+    int postfix_old = *ip++;
+    int postfix_now = *ip;
+    ++ip;
+    int prefix_now = *ip;
+    ip--;
+    int back_now = *ip;
+    p = pts;
+    int struct_before = p->x;
+    p++;
+    int struct_after = p->x;
+    --p;
+    int struct_back = p->y;
+    printf("pointer incdec: %d %d %d %d %d %d %d\n", postfix_old, postfix_now, prefix_now, back_now, struct_before, struct_after, struct_back);
+    int *ip_first = pointer_nums;
+    int *ip_last = &pointer_nums[2];
+    p = pts;
+    Point *p_first = p;
+    Point *p_last = p + 1;
+    printf("pointer diff: %d %d\n", ip_last - ip_first, p_last - p_first);
     printf("field array: %d %d %s %d %d\n", fa.values[0], fa.values[2], fa.name, fa.points[1].x, fa.points[1].y);
     printf("sizeof: %d %d %d %d %d %d %d\n", sizeof(int), sizeof(Point), sizeof(pts), sizeof(pts[0]), sizeof(p), sizeof(fa), sizeof(fa.values));
     printf("sizeof side effect: %d %d\n", sizeof(z++), z);
@@ -95,6 +201,65 @@ int main() {
     printf("bitwise: %x %x %x %x %x %x\n", 0xf0 & 0x0f, 0xf0 | 0x0f, 0xf0 ^ 0xff, ~0x0f, 0x10 << 1, 0x10 >> 2);
     printf("multi decl: %d %d %d %d %c %s %d %d %d %d %d %d\n", multi_a, multi_b, multi_arr[0], multi_arr[1], multi_c, multi_s, multi_p1.x, multi_p2.y, multi_mode, multi_mode2, *multi_ptr, multi_plain);
     printf("global multi: %d %d\n", g_multi_a, g_multi_b);
+
+    char message[] = "Pointer Magic";
+    printf("reverse before: %s\n", message);
+    reverse_string(message);
+    printf("reverse after: %s\n", message);
+    char copy_src[] = "copy me";
+    char copy_dst[16];
+    my_strcpy(copy_dst, copy_src);
+    printf("string funcs: %d %s\n", my_strlen(copy_dst), copy_dst);
+    int array_param_values[3] = { 4, 5, 6 };
+    bump_array_param(array_param_values);
+    printf("array params: %d %d %c\n", sum_array_param(array_param_values), array_param_values[1], first_char_param(copy_dst));
+    int matrix[2][3] = {{1, 2, 3}, {4, 5, 6}};
+    matrix[1][2] = 20;
+    matrix[0][1] += matrix[1][0];
+    int *matrix_row = matrix[1];
+    printf("multi array: %d %d %d %d %d %d %d\n", matrix[0][1], matrix[1][2], matrix_row[2], sizeof(matrix), sizeof(matrix[0]), sum_matrix_param(matrix), bump_matrix_param(matrix));
+    int (*matrix_ptr)[3] = matrix;
+    int ptr_before = matrix_ptr[1][2];
+    int ptr_first = (*matrix_ptr)[0];
+    matrix_ptr++;
+    int ptr_after = (*matrix_ptr)[0];
+    (*matrix_ptr)[1] += 30;
+    printf("array pointer: %d %d %d %d\n", ptr_before, ptr_first, ptr_after, matrix[1][1]);
+
+    int cube[2][3][4] = {
+        {{1, 2, 3, 4}, {5, 6, 7, 8}, {9, 10, 11, 12}},
+        {{13, 14, 15, 16}, {17, 18, 19, 20}, {21, 22, 23, 24}}
+    };
+    cube[1][2][3] = 40;
+    cube[0][1][2] += cube[1][0][0];
+    int cube_sum = sum_cube_param(cube);
+    int cube_bump = bump_cube_param(cube);
+    int (*cube_ptr)[3][4] = cube;
+    int cube_ptr_before = cube_ptr[1][1][2];
+    cube_ptr++;
+    int cube_ptr_after = (*cube_ptr)[2][3];
+    printf("cube array: %d %d %d %d %d %d %d %d %d\n", cube[0][1][2], cube[1][2][3], sizeof(cube), sizeof(cube[0]), sizeof(cube[0][0]), cube_sum, cube_bump, cube_ptr_before, cube_ptr_after);
+
+    char *argv_names[] = {"alpha", "beta", "gamma"};
+    char *argv_more[3];
+    argv_more[0] = "red";
+    argv_more[1] = "green";
+    argv_more[2] = argv_names[2];
+    char **argv_pp = argv_names;
+    argv_pp++;
+    printf("argv pointer: %s %c %d %d %s\n", argv_names[1], argv_names[2][1], argv_name_score(argv_names), argv_double_score(argv_names), argv_pp[1]);
+
+    void *void_ptr;
+    int void_int = 1234;
+    char void_char = 'A';
+    void_ptr = &void_int;
+    int void_read_int = *(int *)void_ptr;
+    *(int *)void_ptr = 5678;
+    void_ptr = &void_char;
+    char void_read_char = *(char *)void_ptr;
+    *(char *)void_ptr = 'Z';
+    void_ptr = pts;
+    printf("void pointer: %d %d %c %c %d\n", void_read_int, void_int, void_read_char, void_char, ((Point *)void_ptr)->y);
 
     char escstr[5] = "A\\\"B";
     printf("escapes: %d %d %d %d %s\n", '\n', '\t', '\\', '\'', escstr);
@@ -135,6 +300,9 @@ int main() {
     enumArray[1] = MODE_MASK;
     printf("enum: %d %d %d %d %d %d\n", MODE_ZERO, mode, sizeKind, enumArray[0], enumArray[1], sizeof(enum Mode));
     printf("prototype: %d\n", proto_add(MODE_ONE, LARGE));
+    int void_ret=0;
+    void_return_test(&void_ret);
+    printf("void return: %d\n", void_ret);
 
     int sw=0;
     switch (2) {

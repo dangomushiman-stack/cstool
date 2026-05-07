@@ -44,10 +44,11 @@ namespace CInterpreterWpf
         public bool IsArray { get; set; }
         public int ArrayLength { get; set; }
         public bool IsArrayLengthInferred { get; set; }
+        public List<int> ArrayDimensions { get; } = new List<int>();
 
         public CTypeInfo Clone()
         {
-            return new CTypeInfo
+            var clone = new CTypeInfo
             {
                 Type = Type,
                 PointerLevel = PointerLevel,
@@ -57,6 +58,8 @@ namespace CInterpreterWpf
                 ArrayLength = ArrayLength,
                 IsArrayLengthInferred = IsArrayLengthInferred
             };
+            clone.ArrayDimensions.AddRange(ArrayDimensions);
+            return clone;
         }
 
         public void CopyFrom(CTypeInfo other)
@@ -69,6 +72,8 @@ namespace CInterpreterWpf
             IsArray = other.IsArray;
             ArrayLength = other.ArrayLength;
             IsArrayLengthInferred = other.IsArrayLengthInferred;
+            ArrayDimensions.Clear();
+            ArrayDimensions.AddRange(other.ArrayDimensions);
         }
 
         public string ToDisplayString()
@@ -78,7 +83,19 @@ namespace CInterpreterWpf
                 baseType = "<unknown>";
 
             string pointerSuffix = new string('*', PointerLevel);
-            string arraySuffix = IsArray ? $"[{ArrayLength}]" : "";
+            string arraySuffix = "";
+            if (IsArray)
+            {
+                if (ArrayDimensions.Count > 0)
+                {
+                    foreach (int dim in ArrayDimensions)
+                        arraySuffix += $"[{dim}]";
+                }
+                else
+                {
+                    arraySuffix = $"[{ArrayLength}]";
+                }
+            }
             return baseType + pointerSuffix + arraySuffix;
         }
     }
@@ -100,6 +117,7 @@ namespace CInterpreterWpf
         public bool IsArray { get => TypeInfo.IsArray; set => TypeInfo.IsArray = value; }
         public int ArrayLength { get => TypeInfo.ArrayLength; set => TypeInfo.ArrayLength = value; }
         public bool IsArrayLengthInferred { get => TypeInfo.IsArrayLengthInferred; set => TypeInfo.IsArrayLengthInferred = value; }
+        public List<int> ArrayDimensions => TypeInfo.ArrayDimensions;
     }
 
     public class StructDeclNode : IASTNode
@@ -117,6 +135,7 @@ namespace CInterpreterWpf
         public int PointerLevel { get => TypeInfo.PointerLevel; set => TypeInfo.PointerLevel = value; }
         public bool IsStruct { get => TypeInfo.IsStruct; set => TypeInfo.IsStruct = value; }
         public string StructName { get => TypeInfo.StructName; set => TypeInfo.StructName = value; }
+        public List<int> ArrayDimensions => TypeInfo.ArrayDimensions;
     }
 
     public class FunctionDeclNode : IASTNode
@@ -160,6 +179,7 @@ namespace CInterpreterWpf
         public bool IsArray { get => TypeInfo.IsArray; set => TypeInfo.IsArray = value; }
         public int ArrayLength { get => TypeInfo.ArrayLength; set => TypeInfo.ArrayLength = value; }
         public bool IsArrayLengthInferred { get => TypeInfo.IsArrayLengthInferred; set => TypeInfo.IsArrayLengthInferred = value; }
+        public List<int> ArrayDimensions => TypeInfo.ArrayDimensions;
         public bool IsStruct { get => TypeInfo.IsStruct; set => TypeInfo.IsStruct = value; }
         public string StructName { get => TypeInfo.StructName; set => TypeInfo.StructName = value; }
     }

@@ -14,6 +14,7 @@ namespace CInterpreterWpf
         public int PointerLevel { get => TypeInfo.PointerLevel; set => TypeInfo.PointerLevel = value; }
         public bool IsArray { get => TypeInfo.IsArray; set => TypeInfo.IsArray = value; }
         public int ArrayLength { get => TypeInfo.ArrayLength; set => TypeInfo.ArrayLength = value; }
+        public List<int> ArrayDimensions => TypeInfo.ArrayDimensions;
         public bool IsStruct { get => TypeInfo.IsStruct; set => TypeInfo.IsStruct = value; }
         public string StructName { get => TypeInfo.StructName; set => TypeInfo.StructName = value; }
         public int StructSize { get; set; }
@@ -27,10 +28,21 @@ namespace CInterpreterWpf
              4); // int, float のデフォルトは 4バイト
 
         public int Size =>
-            IsArray ? ElementSize * ArrayLength :
+            IsArray ? ElementSize * GetArrayTotalLength(TypeInfo) :
             IsPointer ? 4 :
             IsStruct ? StructSize :
             ElementSize;
+
+        private static int GetArrayTotalLength(CTypeInfo typeInfo)
+        {
+            if (typeInfo.ArrayDimensions.Count == 0)
+                return typeInfo.ArrayLength;
+
+            int total = 1;
+            foreach (int dim in typeInfo.ArrayDimensions)
+                total *= dim;
+            return total;
+        }
 
         public VarInfo Clone()
         {
@@ -87,7 +99,9 @@ namespace CInterpreterWpf
     {
         private readonly Action<string> _stdout;
 
-        public byte[] Memory { get; } = new byte[1024];
+        private const int MemorySize = 4096;
+
+        public byte[] Memory { get; } = new byte[MemorySize];
         public Dictionary<string, VarInfo> Env { get; } = new Dictionary<string, VarInfo>();
         public List<MemoryRegionInfo> Regions { get; } = new List<MemoryRegionInfo>();
         public List<ExecutionSnapshot> Snapshots { get; } = new List<ExecutionSnapshot>();
@@ -98,8 +112,10 @@ namespace CInterpreterWpf
         private readonly Dictionary<string, FunctionDeclNode> _functions = new Dictionary<string, FunctionDeclNode>();
         private readonly Dictionary<string, StructDeclNode> _structs = new Dictionary<string, StructDeclNode>();
 
-        private int _stackPtr = 0;
-        private int _literalPtr = 1024;
+        private const int DataStartAddress = 4;
+
+        private int _stackPtr = DataStartAddress;
+        private int _literalPtr = MemorySize;
         private int _snapshotStep = 0;
 
         private bool _hasReturn = false;
@@ -130,6 +146,10 @@ namespace CInterpreterWpf
 
             CopyTypeInfo(info.TypeInfo, declaration?.TypeInfo);
             info.ArrayLength = arrayLength;
+            if (info.IsArray && info.ArrayDimensions.Count == 0)
+                info.ArrayDimensions.Add(arrayLength);
+            if (info.IsArray && info.ArrayDimensions.Count > 0)
+                info.ArrayDimensions[0] = arrayLength;
             return info;
         }
 
@@ -171,7 +191,7 @@ namespace CInterpreterWpf
             _stringLiteralPool.Clear();
             _scopes.Clear();
 
-            _stackPtr = 0;
+            _stackPtr = DataStartAddress;
             _literalPtr = Memory.Length;
             _snapshotStep = 0;
 
@@ -285,7 +305,7 @@ namespace CInterpreterWpf
         private int GetStructFieldSize(StructFieldDecl field)
         {
             int elementSize = GetStructFieldElementSize(field);
-            return field.IsArray ? elementSize * field.ArrayLength : elementSize;
+            return field.IsArray ? elementSize * GetArrayTotalLength(field.TypeInfo) : elementSize;
         }
 
         private int GetStructSize(string structName)
@@ -470,6 +490,14 @@ namespace CInterpreterWpf
 
         private bool TryGetStructPointerType(IASTNode expr, out string structName)
         {
+            if (expr is CastNode cast &&
+                cast.TargetTypeInfo.IsStruct &&
+                cast.TargetTypeInfo.PointerLevel == 1)
+            {
+                structName = cast.TargetTypeInfo.StructName;
+                return true;
+            }
+
             if (expr is VariableNode v &&
                 Env.TryGetValue(v.Name, out var info) &&
                 info.IsStruct && info.PointerLevel == 1)
@@ -589,10 +617,105 @@ namespace CInterpreterWpf
             if (TryGetStructPointerType(expr, out string structName))
                 return GetStructSize(structName);
 
+            if (expr is VariableNode v && Env.TryGetValue(v.Name, out var info) && info.IsArray)
+                return GetArrayStride(info.TypeInfo, 0, GetArrayScalarElementSize(info.TypeInfo, info.StructSize));
+
+            if (expr is VariableNode pointerArrayVar &&
+                Env.TryGetValue(pointerArrayVar.Name, out var pointerArrayInfo) &&
+                IsPointerToArray(pointerArrayInfo))
+                return GetArrayStride(pointerArrayInfo.TypeInfo, 0, GetArrayScalarElementSize(pointerArrayInfo.TypeInfo, pointerArrayInfo.StructSize));
+
             if (TryGetPointeeType(expr, out string type, out int pointerLevel))
                 return GetTypeElementSize(type, pointerLevel > 0);
 
             return 4;
+        }
+
+        private int GetIncDecStep(IASTNode target)
+        {
+            if (target is VariableNode v && Env.TryGetValue(v.Name, out var info))
+            {
+                if (info.IsStruct && info.PointerLevel == 1)
+                    return GetStructSize(info.StructName);
+
+                if (IsPointerToArray(info))
+                    return GetArrayStride(info.TypeInfo, 0, GetArrayScalarElementSize(info.TypeInfo, info.StructSize));
+
+                if (info.PointerLevel > 0)
+                    return GetTypeElementSize(info.Type, info.PointerLevel > 1);
+            }
+
+            if (TryGetStructPointerType(target, out string structName))
+                return GetStructSize(structName);
+
+            if (TryGetPointeeType(target, out string type, out int pointerLevel))
+                return GetTypeElementSize(type, pointerLevel > 0);
+
+            return 1;
+        }
+
+        private static bool IsPointerToArray(VarInfo info)
+        {
+            return info != null && !info.IsArray && info.PointerLevel > 0 && info.ArrayDimensions.Count > 0;
+        }
+
+        private bool IsPointerToArrayExpression(IASTNode expr, out VarInfo info)
+        {
+            if (expr is VariableNode v &&
+                Env.TryGetValue(v.Name, out info) &&
+                IsPointerToArray(info))
+                return true;
+
+            info = null;
+            return false;
+        }
+
+        private bool TryGetPointerDifferenceElementSize(IASTNode left, IASTNode right, out int elementSize)
+        {
+            if (left is VariableNode leftVar &&
+                right is VariableNode rightVar &&
+                Env.TryGetValue(leftVar.Name, out var leftInfo) &&
+                Env.TryGetValue(rightVar.Name, out var rightInfo))
+            {
+                if (leftInfo.IsStruct &&
+                    rightInfo.IsStruct &&
+                    leftInfo.PointerLevel == 1 &&
+                    rightInfo.PointerLevel == 1 &&
+                    leftInfo.StructName == rightInfo.StructName)
+                {
+                    elementSize = GetStructSize(leftInfo.StructName);
+                    return true;
+                }
+
+                if (leftInfo.PointerLevel > 0 &&
+                    rightInfo.PointerLevel > 0 &&
+                    leftInfo.Type == rightInfo.Type &&
+                    leftInfo.PointerLevel == rightInfo.PointerLevel)
+                {
+                    elementSize = GetTypeElementSize(leftInfo.Type, leftInfo.PointerLevel > 1);
+                    return true;
+                }
+            }
+
+            if (TryGetStructPointerType(left, out string leftStructName) &&
+                TryGetStructPointerType(right, out string rightStructName) &&
+                leftStructName == rightStructName)
+            {
+                elementSize = GetStructSize(leftStructName);
+                return true;
+            }
+
+            if (TryGetPointeeType(left, out string leftType, out int leftPointerLevel) &&
+                TryGetPointeeType(right, out string rightType, out int rightPointerLevel) &&
+                leftType == rightType &&
+                leftPointerLevel == rightPointerLevel)
+            {
+                elementSize = GetTypeElementSize(leftType, leftPointerLevel > 0);
+                return true;
+            }
+
+            elementSize = 0;
+            return false;
         }
 
         private int CallUserFunction(FunctionCallNode call)
@@ -702,13 +825,13 @@ namespace CInterpreterWpf
                 throw new Exception($"Execution Error: memory access out of range at 0x{addr:X4}");
         }
 
-        private void EnsureSpaceForStackAllocation(int size)
+        private void EnsureSpaceForStackAllocation(int size, string label = null)
         {
             if (size <= 0)
-                throw new Exception("Execution Error: invalid allocation size");
+                throw new Exception($"Execution Error: invalid allocation size for '{label}'");
 
             if (_stackPtr + size > _literalPtr)
-                throw new Exception("Execution Error: out of memory");
+                throw new Exception($"Execution Error: out of memory allocating '{label}' size {size}");
         }
 
         private void EnterScope()
@@ -743,7 +866,7 @@ namespace CInterpreterWpf
 
         private int AllocateStackRegion(int size, string label)
         {
-            EnsureSpaceForStackAllocation(size);
+            EnsureSpaceForStackAllocation(size, label);
 
             int addr = _stackPtr;
 
@@ -876,6 +999,40 @@ namespace CInterpreterWpf
             };
         }
 
+        private static int GetArrayTotalLength(CTypeInfo typeInfo)
+        {
+            if (typeInfo.ArrayDimensions.Count == 0)
+                return typeInfo.ArrayLength;
+
+            int total = 1;
+            foreach (int dim in typeInfo.ArrayDimensions)
+                total *= dim;
+            return total;
+        }
+
+        private int GetArrayScalarElementSize(CTypeInfo typeInfo, int structSize)
+        {
+            if (typeInfo.IsStruct && !typeInfo.IsPointer)
+                return structSize > 0 ? structSize : GetStructSize(typeInfo.StructName);
+
+            bool elementIsPointer = typeInfo.IsArray
+                ? typeInfo.PointerLevel > 0
+                : typeInfo.PointerLevel > 1;
+
+            return GetTypeElementSize(typeInfo.Type, elementIsPointer);
+        }
+
+        private static int GetArrayStride(CTypeInfo typeInfo, int dimensionIndex, int scalarElementSize)
+        {
+            if (typeInfo.ArrayDimensions.Count == 0)
+                return scalarElementSize;
+
+            int stride = scalarElementSize;
+            for (int i = dimensionIndex + 1; i < typeInfo.ArrayDimensions.Count; i++)
+                stride *= typeInfo.ArrayDimensions[i];
+            return stride;
+        }
+
         private int GetSizeOfType(CTypeInfo typeInfo)
         {
             if (typeInfo == null)
@@ -886,7 +1043,7 @@ namespace CInterpreterWpf
                 int elementSize = typeInfo.IsStruct && !typeInfo.IsPointer
                     ? GetStructSize(typeInfo.StructName)
                     : GetTypeElementSize(typeInfo.Type, typeInfo.PointerLevel > 0);
-                return elementSize * typeInfo.ArrayLength;
+                return elementSize * GetArrayTotalLength(typeInfo);
             }
 
             if (typeInfo.PointerLevel > 0)
@@ -1005,6 +1162,16 @@ namespace CInterpreterWpf
 
             if (expr is ArrayAccessNode arrayAccess)
             {
+                if (TryGetIndexedArrayRoot(arrayAccess, out var rootInfo, out var indices, out _))
+                {
+                    int scalarSize = GetArrayScalarElementSize(rootInfo.TypeInfo, rootInfo.StructSize);
+                    int rank = rootInfo.ArrayDimensions.Count > 0 ? rootInfo.ArrayDimensions.Count : 1;
+                    if (indices.Count >= rank)
+                        return scalarSize;
+
+                    return GetArrayStride(rootInfo.TypeInfo, indices.Count - 1, scalarSize);
+                }
+
                 if (TryGetArrayAccessStructTypeNoEval(arrayAccess, out string elementStructName))
                     return GetStructSize(elementStructName);
 
@@ -1102,6 +1269,13 @@ namespace CInterpreterWpf
 
         private bool TryGetPointeeType(IASTNode expr, out string type, out int pointerLevel)
         {
+            if (expr is CastNode cast && cast.TargetTypeInfo.PointerLevel > 0)
+            {
+                type = cast.TargetTypeInfo.Type;
+                pointerLevel = cast.TargetTypeInfo.PointerLevel - 1;
+                return true;
+            }
+
             if (expr is StructMemberAccessNode member)
             {
                 if (TryGetStructValueInfo(member.Target, out string baseStructName, out _))
@@ -1129,11 +1303,11 @@ namespace CInterpreterWpf
                 if (varInfo.IsArray)
                 {
                     type = varInfo.Type;
-                    pointerLevel = Math.Max(0, varInfo.PointerLevel - 1);
+                    pointerLevel = varInfo.PointerLevel;
                     return true;
                 }
 
-                if (varInfo.IsPointer)
+                if (varInfo.PointerLevel > 0)
                 {
                     type = varInfo.Type;
                     pointerLevel = Math.Max(0, varInfo.PointerLevel - 1);
@@ -1168,8 +1342,41 @@ namespace CInterpreterWpf
 
             if (expr is ArrayAccessNode access)
             {
-                if (TryGetPointeeType(access.Target, out type, out pointerLevel))
+                if (TryGetIndexedArrayRoot(access, out var baseInfo, out var indices, out _))
+                {
+                    int rank = baseInfo.ArrayDimensions.Count > 0 ? baseInfo.ArrayDimensions.Count : 1;
+                    int remainingDimensions = rank - indices.Count;
+                    if (remainingDimensions > 0)
+                    {
+                        type = baseInfo.Type;
+                        pointerLevel = baseInfo.IsArray
+                            ? baseInfo.PointerLevel
+                            : Math.Max(0, baseInfo.PointerLevel - 1);
+                        return true;
+                    }
+
+                    int expressionPointerLevel = baseInfo.IsArray
+                        ? baseInfo.PointerLevel
+                        : Math.Max(0, baseInfo.PointerLevel - rank);
+                    expressionPointerLevel = Math.Max(0, expressionPointerLevel - Math.Max(0, indices.Count - rank));
+                    if (expressionPointerLevel > 0)
+                    {
+                        type = baseInfo.Type;
+                        pointerLevel = expressionPointerLevel - 1;
+                        return true;
+                    }
+
+                    type = null;
+                    pointerLevel = 0;
+                    return false;
+                }
+
+                if (TryGetPointeeType(access.Target, out type, out pointerLevel) &&
+                    pointerLevel > 0)
+                {
+                    pointerLevel -= 1;
                     return true;
+                }
             }
 
             if (expr is UnaryOpNode u && u.Operator == "&")
@@ -1212,17 +1419,84 @@ namespace CInterpreterWpf
 
         private int GetIndexedAddress(ArrayAccessNode access)
         {
+            if (TryGetDereferencedPointerArrayRoot(access, out var pointerArrayInfo, out var derefIndices, out string pointerArrayName))
+            {
+                int scalarSize = GetArrayScalarElementSize(pointerArrayInfo.TypeInfo, pointerArrayInfo.StructSize);
+                int addr = ReadScalarAtAddress(pointerArrayInfo.Type, pointerArrayInfo.IsPointer, pointerArrayInfo.Address);
+
+                for (int i = 0; i < derefIndices.Count; i++)
+                {
+                    int dimIndex = i + 1;
+                    int indexValue = Convert.ToInt32(EvaluateExpression(derefIndices[i]));
+                    int dimLength = pointerArrayInfo.ArrayDimensions.Count > dimIndex ? pointerArrayInfo.ArrayDimensions[dimIndex] : 0;
+                    if (dimLength > 0 && (indexValue < 0 || indexValue >= dimLength))
+                        throw new Exception($"Execution Error: array index out of range: {pointerArrayName}[{indexValue}]");
+
+                    addr += indexValue * GetArrayStride(pointerArrayInfo.TypeInfo, dimIndex, scalarSize);
+                }
+
+                return addr;
+            }
+
+            if (TryGetIndexedArrayRoot(access, out var baseInfo, out var indices, out string baseName))
+            {
+                int scalarSize = GetArrayScalarElementSize(baseInfo.TypeInfo, baseInfo.StructSize);
+                int addr = baseInfo.IsArray ? baseInfo.Address : ReadScalarAtAddress(baseInfo.Type, baseInfo.IsPointer, baseInfo.Address);
+                int rank = baseInfo.ArrayDimensions.Count > 0 ? baseInfo.ArrayDimensions.Count : 1;
+
+                if (indices.Count > rank && baseInfo.PointerLevel > 0)
+                {
+                    for (int i = 0; i < rank; i++)
+                    {
+                        int indexValue = Convert.ToInt32(EvaluateExpression(indices[i]));
+                        int dimLength = baseInfo.ArrayDimensions.Count > i ? baseInfo.ArrayDimensions[i] : baseInfo.ArrayLength;
+                        if (dimLength > 0 && (indexValue < 0 || indexValue >= dimLength))
+                            throw new Exception($"Execution Error: array index out of range: {baseName}[{indexValue}]");
+
+                        addr += indexValue * GetArrayStride(baseInfo.TypeInfo, i, scalarSize);
+                    }
+
+                    addr = ReadScalarAtAddress(baseInfo.Type, true, addr);
+                    int pointerLevel = baseInfo.IsArray
+                        ? baseInfo.PointerLevel
+                        : Math.Max(0, baseInfo.PointerLevel - 1);
+
+                    for (int i = rank; i < indices.Count; i++)
+                    {
+                        int indexValue = Convert.ToInt32(EvaluateExpression(indices[i]));
+                        int pointerElementSize = GetTypeElementSize(baseInfo.Type, pointerLevel > 1);
+                        addr += indexValue * pointerElementSize;
+                        if (pointerLevel > 0)
+                            pointerLevel--;
+                    }
+
+                    return addr;
+                }
+
+                for (int i = 0; i < indices.Count; i++)
+                {
+                    int indexValue = Convert.ToInt32(EvaluateExpression(indices[i]));
+                    int dimLength = baseInfo.ArrayDimensions.Count > i ? baseInfo.ArrayDimensions[i] : baseInfo.ArrayLength;
+                    if (dimLength > 0 && (indexValue < 0 || indexValue >= dimLength))
+                        throw new Exception($"Execution Error: array index out of range: {baseName}[{indexValue}]");
+
+                    addr += indexValue * GetArrayStride(baseInfo.TypeInfo, i, scalarSize);
+                }
+
+                return addr;
+            }
+
             int index = Convert.ToInt32(EvaluateExpression(access.Index));
             int baseAddr = Convert.ToInt32(EvaluateExpression(access.Target));
 
             if (access.Target is VariableNode varNode &&
-                Env.TryGetValue(varNode.Name, out var baseInfo) &&
-                baseInfo.IsArray)
+                Env.TryGetValue(varNode.Name, out var variableArrayInfo) &&
+                variableArrayInfo.IsArray)
             {
-                if (index < 0 || index >= baseInfo.ArrayLength)
+                if (index < 0 || index >= variableArrayInfo.ArrayLength)
                     throw new Exception($"Execution Error: array index out of range: {varNode.Name}[{index}]");
 
-                return baseInfo.Address + index * baseInfo.ElementSize;
+                return variableArrayInfo.Address + index * variableArrayInfo.ElementSize;
             }
 
             if (access.Target is StructMemberAccessNode memberAccess &&
@@ -1255,10 +1529,69 @@ namespace CInterpreterWpf
             return baseAddr + index * elementSize;
         }
 
+        private bool TryGetDereferencedPointerArrayRoot(ArrayAccessNode access, out VarInfo baseInfo, out List<IASTNode> indices, out string baseName)
+        {
+            indices = new List<IASTNode>();
+            IASTNode node = access;
+            while (node is ArrayAccessNode current)
+            {
+                indices.Insert(0, current.Index);
+                node = current.Target;
+            }
+
+            if (node is UnaryOpNode { Operator: "*" } deref &&
+                deref.Target is VariableNode variable &&
+                Env.TryGetValue(variable.Name, out baseInfo) &&
+                IsPointerToArray(baseInfo))
+            {
+                baseName = variable.Name;
+                return true;
+            }
+
+            baseInfo = null;
+            baseName = null;
+            return false;
+        }
+
+        private bool TryGetIndexedArrayRoot(ArrayAccessNode access, out VarInfo baseInfo, out List<IASTNode> indices, out string baseName)
+        {
+            indices = new List<IASTNode>();
+            IASTNode node = access;
+            while (node is ArrayAccessNode current)
+            {
+                indices.Insert(0, current.Index);
+                node = current.Target;
+            }
+
+            if (node is VariableNode variable &&
+                Env.TryGetValue(variable.Name, out baseInfo) &&
+                (baseInfo.IsArray || (baseInfo.PointerLevel > 0 && baseInfo.ArrayDimensions.Count > 0)))
+            {
+                baseName = variable.Name;
+                return true;
+            }
+
+            baseInfo = null;
+            baseName = null;
+            return false;
+        }
+
+        private bool IsArrayAccessToSubarray(ArrayAccessNode access)
+        {
+            if (!TryGetIndexedArrayRoot(access, out var baseInfo, out var indices, out _))
+                return false;
+
+            int rank = baseInfo.ArrayDimensions.Count > 0 ? baseInfo.ArrayDimensions.Count : 1;
+            return indices.Count < rank;
+        }
+
         private int ReadTarget(IASTNode target)
         {
             if (target is VariableNode varNode)
             {
+                if (varNode.Name == "NULL")
+                    return 0;
+
                 var info = Env[varNode.Name];
 
                 if (info.IsArray)
@@ -1308,6 +1641,9 @@ namespace CInterpreterWpf
             {
                 int addr = GetIndexedAddress(arrayAccess);
 
+                if (IsArrayAccessToSubarray(arrayAccess))
+                    return addr;
+
                 if (TryGetArrayAccessStructType(arrayAccess, out _))
                     return addr;
 
@@ -1322,6 +1658,9 @@ namespace CInterpreterWpf
                 int addr = Convert.ToInt32(EvaluateExpression(unary.Target));
 
                 if (TryGetStructPointerType(unary.Target, out _))
+                    return addr;
+
+                if (IsPointerToArrayExpression(unary.Target, out _))
                     return addr;
 
                 if (TryGetPointeeType(unary.Target, out string pointeeType, out int pointeeLevel))
@@ -1388,6 +1727,9 @@ namespace CInterpreterWpf
             if (target is ArrayAccessNode arrayAccess)
             {
                 int addr = GetIndexedAddress(arrayAccess);
+
+                if (IsArrayAccessToSubarray(arrayAccess))
+                    throw new Exception("Execution Error: cannot assign to array element subarray directly");
 
                 if (TryGetPointeeType(arrayAccess.Target, out string elementType, out int elementPointerLevel))
                 {
@@ -1490,6 +1832,12 @@ namespace CInterpreterWpf
 
         private void InitializeArrayElements(VarInfo info, List<IASTNode> elements)
         {
+            if (info.ArrayDimensions.Count > 1)
+            {
+                InitializeArrayElements(info, elements, 0, info.Address);
+                return;
+            }
+
             if (elements.Count > info.ArrayLength)
                 throw new Exception($"Execution Error: too many initializer elements for array at 0x{info.Address:X4}");
 
@@ -1497,6 +1845,53 @@ namespace CInterpreterWpf
             {
                 int addr = info.Address + i * info.ElementSize;
                 var elem = elements[i];
+
+                if (info.IsStruct && !info.IsPointer)
+                {
+                    var elementInfo = new VarInfo
+                    {
+                        Address = addr,
+                        StructSize = info.StructSize
+                    };
+                    elementInfo.TypeInfo.Type = "struct";
+                    elementInfo.TypeInfo.IsPointer = false;
+                    elementInfo.TypeInfo.IsArray = false;
+                    elementInfo.TypeInfo.ArrayLength = 0;
+                    elementInfo.TypeInfo.IsStruct = true;
+                    elementInfo.TypeInfo.StructName = info.StructName;
+
+                    InitializeStruct(elementInfo, elem);
+                    continue;
+                }
+
+                int value = Convert.ToInt32(EvaluateExpression(elem));
+                WriteScalarAtAddress(info.Type, info.IsPointer, addr, value);
+            }
+        }
+
+        private void InitializeArrayElements(VarInfo info, List<IASTNode> elements, int dimensionIndex, int baseAddress)
+        {
+            int rank = info.ArrayDimensions.Count;
+            int length = info.ArrayDimensions[dimensionIndex];
+            if (elements.Count > length)
+                throw new Exception($"Execution Error: too many initializer elements for array at 0x{baseAddress:X4}");
+
+            int scalarSize = GetArrayScalarElementSize(info.TypeInfo, info.StructSize);
+            int stride = GetArrayStride(info.TypeInfo, dimensionIndex, scalarSize);
+
+            for (int i = 0; i < elements.Count; i++)
+            {
+                int addr = baseAddress + i * stride;
+                var elem = elements[i];
+
+                if (dimensionIndex < rank - 1)
+                {
+                    if (elem is not ArrayInitializerNode nested)
+                        throw new Exception("Execution Error: nested array initializer is required");
+
+                    InitializeArrayElements(info, nested.Elements, dimensionIndex + 1, addr);
+                    continue;
+                }
 
                 if (info.IsStruct && !info.IsPointer)
                 {
@@ -1864,7 +2259,7 @@ namespace CInterpreterWpf
 
             if (stmt is ReturnNode ret)
             {
-                _returnValue = EvaluateExpression(ret.Value);
+                _returnValue = ret.Value == null ? 0 : EvaluateExpression(ret.Value);
                 _hasReturn = true;
                 CaptureSnapshot("Return");
                 return;
@@ -1920,7 +2315,8 @@ namespace CInterpreterWpf
             if (expr is PostfixOpNode postfix)
             {
                 int oldValue = ReadTarget(postfix.Target);
-                int newValue = postfix.Operator == "++" ? oldValue + 1 : oldValue - 1;
+                int step = GetIncDecStep(postfix.Target);
+                int newValue = postfix.Operator == "++" ? oldValue + step : oldValue - step;
                 WriteTarget(postfix.Target, newValue);
                 return oldValue;
             }
@@ -1959,7 +2355,8 @@ namespace CInterpreterWpf
                 if (u.Operator == "++" || u.Operator == "--")
                 {
                     int oldValue = ReadTarget(u.Target);
-                    int newValue = u.Operator == "++" ? oldValue + 1 : oldValue - 1;
+                    int step = GetIncDecStep(u.Target);
+                    int newValue = u.Operator == "++" ? oldValue + step : oldValue - step;
                     WriteTarget(u.Target, newValue);
                     return newValue;
                 }
@@ -1995,6 +2392,12 @@ namespace CInterpreterWpf
 
                 int left = Convert.ToInt32(EvaluateExpression(b.Left));
                 int right = Convert.ToInt32(EvaluateExpression(b.Right));
+
+                if (b.Operator == "-" &&
+                    TryGetPointerDifferenceElementSize(b.Left, b.Right, out int differenceElementSize))
+                {
+                    return (left - right) / differenceElementSize;
+                }
 
                 if (b.Operator == "+" || b.Operator == "-")
                 {
