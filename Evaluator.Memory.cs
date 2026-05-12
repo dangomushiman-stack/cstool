@@ -108,11 +108,11 @@ namespace CInterpreterWpf
             Array.Clear(Memory, addr, size);
         }
 
-        private void CaptureSnapshot(string evt)
+        private void CaptureSnapshot(string evt, bool force = false, int breakpointLine = 0)
         {
             int step = _snapshotStep++;
             int sourceLine = _currentSourceLine;
-            if (!_snapshotBreakpoints.Contains(sourceLine))
+            if (!force && !_snapshotBreakpoints.Contains(sourceLine))
                 return;
 
             var memoryCopy = new byte[Memory.Length];
@@ -130,6 +130,8 @@ namespace CInterpreterWpf
             {
                 Step = step,
                 SourceLine = sourceLine,
+                BreakpointLine = breakpointLine,
+                FunctionName = _currentFunctionName,
                 Event = evt,
                 Memory = memoryCopy,
                 Env = envCopy,

@@ -99,11 +99,13 @@ namespace CInterpreterWpf
             object savedReturnValue = _returnValue;
             bool savedBreak = _breakRequested;
             bool savedContinue = _continueRequested;
+            string savedFunctionName = _currentFunctionName;
 
             _hasReturn = false;
             _returnValue = 0;
             _breakRequested = false;
             _continueRequested = false;
+            _currentFunctionName = call.FunctionName;
 
             EnterScope();
             CaptureSnapshot($"Enter function: {call.FunctionName}");
@@ -152,6 +154,7 @@ namespace CInterpreterWpf
                 _returnValue = savedReturnValue;
                 _breakRequested = savedBreak;
                 _continueRequested = savedContinue;
+                _currentFunctionName = savedFunctionName;
             }
         }
     }

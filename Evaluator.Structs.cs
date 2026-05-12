@@ -26,6 +26,21 @@ namespace CInterpreterWpf
             return InspectStructMembers(snapshot.Memory, info.StructName, baseAddress, "");
         }
 
+        public List<StructMemberInspectItem> InspectStructVariable(ExecutionSnapshot snapshot, string variableName)
+        {
+            if (snapshot == null)
+                throw new ArgumentNullException(nameof(snapshot));
+
+            if (string.IsNullOrWhiteSpace(variableName) ||
+                !snapshot.Env.TryGetValue(variableName, out var info))
+                throw new Exception("Struct inspector: select a variable from the memory view");
+
+            if (!info.IsStruct || info.IsArray || info.IsPointer)
+                throw new Exception($"Struct inspector: '{variableName}' is not a struct variable");
+
+            return InspectStructMembers(snapshot.Memory, info.StructName, info.Address, "");
+        }
+
         private List<StructMemberInspectItem> InspectStructMembers(byte[] memory, string structName, int baseAddress, string prefix)
         {
             if (!_structs.TryGetValue(structName, out var sd))
@@ -55,11 +70,16 @@ namespace CInterpreterWpf
                         }
                         else
                         {
+                            int size = field.IsPointer ? 4 : GetStructFieldElementSize(field);
                             items.Add(new StructMemberInspectItem
                             {
                                 MemberName = indexedName,
                                 Type = GetStructFieldDisplayType(field),
                                 Address = $"0x{elementAddress:X4}",
+                                AddressValue = elementAddress,
+                                BaseType = field.Type,
+                                IsPointer = field.IsPointer,
+                                Size = size,
                                 Value = FormatStructFieldValue(memory, elementAddress, field.Type, field.IsPointer)
                             });
                         }
@@ -71,11 +91,16 @@ namespace CInterpreterWpf
                 }
                 else
                 {
+                    int size = field.IsPointer ? 4 : GetStructFieldElementSize(field);
                     items.Add(new StructMemberInspectItem
                     {
                         MemberName = memberName,
                         Type = GetStructFieldDisplayType(field),
                         Address = $"0x{fieldAddress:X4}",
+                        AddressValue = fieldAddress,
+                        BaseType = field.Type,
+                        IsPointer = field.IsPointer,
+                        Size = size,
                         Value = FormatStructFieldValue(memory, fieldAddress, field.Type, field.IsPointer)
                     });
                 }

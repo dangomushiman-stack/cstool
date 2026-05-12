@@ -19,6 +19,14 @@ namespace CInterpreterWpf
 
             try
             {
+            if (_preExecutionBreakpoints.Contains(_currentSourceLine))
+            {
+                int breakpointLine = _preExecutionBreakpointLines.TryGetValue(_currentSourceLine, out int mappedLine)
+                    ? mappedLine
+                    : _currentSourceLine;
+                CaptureSnapshot($"Before line {_currentSourceLine}", true, breakpointLine);
+            }
+
             if (stmt is BlockNode block)
             {
                 EnterScope();
