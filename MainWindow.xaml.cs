@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 
@@ -9,6 +10,7 @@ namespace CInterpreterWpf
     public partial class MainWindow : Window
     {
         private Evaluator _lastEvaluator;
+        private ExecutionSnapshot _currentSnapshot;
         private List<int> _breakpoints = new List<int>();
 
         public MainWindow()
@@ -24,6 +26,34 @@ namespace CInterpreterWpf
     printf(""outer: %d\n"", x);
     return 0;
 }";
+            UpdateCaretInfo();
+        }
+
+        private void CodeEditor_SelectionChanged(object sender, RoutedEventArgs e)
+        {
+            UpdateCaretInfo();
+        }
+
+        private void CodeEditor_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            UpdateCaretInfo();
+        }
+
+        private void UpdateCaretInfo()
+        {
+            if (CaretInfoText == null || CodeEditor == null)
+                return;
+
+            int caretIndex = CodeEditor.CaretIndex;
+            int lineIndex = CodeEditor.GetLineIndexFromCharacterIndex(caretIndex);
+            if (lineIndex < 0)
+                lineIndex = 0;
+
+            int lineStartIndex = CodeEditor.GetCharacterIndexFromLineIndex(lineIndex);
+            int column = Math.Max(0, caretIndex - lineStartIndex) + 1;
+            int lineCount = Math.Max(1, CodeEditor.LineCount);
+
+            CaretInfoText.Text = $"Line: {lineIndex + 1}, Col: {column} / Lines: {lineCount}";
         }
 
         private void RunButton_Click(object sender, RoutedEventArgs e)
@@ -49,7 +79,11 @@ namespace CInterpreterWpf
                 var ast = parser.Parse();
 
                 _lastEvaluator = new Evaluator(printCallback);
+                _lastEvaluator.SetSnapshotBreakpoints(_breakpoints);
                 printCallback("=== Program Output ===");
+                printCallback(_breakpoints.Count == 0
+                    ? "[Breakpoints] none"
+                    : $"[Breakpoints] lines: {string.Join(", ", _breakpoints)}");
                 _lastEvaluator.Evaluate(ast);
                 printCallback("======================");
                 printCallback($"[Snapshots] {_lastEvaluator.Snapshots.Count}");
@@ -68,11 +102,9 @@ namespace CInterpreterWpf
 
         private void ParseBreakpoints()
         {
-            _breakpoints = BreakpointTextBox.Text
-                .Split(new[] { ',', ' ', ';', '\t' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(s => int.TryParse(s, out int n) ? (int?)n : null)
-                .Where(n => n.HasValue)
-                .Select(n => n.Value)
+            _breakpoints = Regex.Matches(BreakpointTextBox.Text ?? "", @"\d+")
+                .Cast<Match>()
+                .Select(m => int.Parse(m.Value))
                 .Distinct()
                 .OrderBy(n => n)
                 .ToList();
@@ -95,7 +127,7 @@ namespace CInterpreterWpf
 
             if (_breakpoints.Count > 0)
             {
-                int idx = _lastEvaluator.Snapshots.FindIndex(s => _breakpoints.Contains(s.Step));
+                int idx = _lastEvaluator.Snapshots.FindIndex(s => _breakpoints.Contains(s.SourceLine));
                 if (idx >= 0)
                     targetIndex = idx;
             }
@@ -142,7 +174,7 @@ namespace CInterpreterWpf
                 currentStep = current.Step;
 
             var next = _lastEvaluator.Snapshots
-                .Where(s => s.Step > currentStep && _breakpoints.Contains(s.Step))
+                .Where(s => s.Step > currentStep && _breakpoints.Contains(s.SourceLine))
                 .OrderBy(s => s.Step)
                 .FirstOrDefault();
 
@@ -159,14 +191,16 @@ namespace CInterpreterWpf
 
         private void UpdateSnapshotViews(ExecutionSnapshot snapshot)
         {
-            bool isBreakpoint = _breakpoints.Contains(snapshot.Step);
+            _currentSnapshot = snapshot;
+            bool isBreakpoint = _breakpoints.Contains(snapshot.SourceLine);
 
             SnapshotInfoText.Text =
-                $"Step: {snapshot.Step} | Event: {snapshot.Event} | ScopeDepth: {snapshot.ScopeDepth} | SP: 0x{snapshot.StackPointer:X4}" +
+                $"Step: {snapshot.Step} | Line: {snapshot.SourceLine} | Event: {snapshot.Event} | ScopeDepth: {snapshot.ScopeDepth} | SP: 0x{snapshot.StackPointer:X4}" +
                 (isBreakpoint ? " | BREAKPOINT" : "");
 
             UpdateMemoryView(snapshot);
             UpdateByteMemoryView(snapshot);
+            UpdateStructInspector();
         }
 
         private void UpdateMemoryView(ExecutionSnapshot snapshot)
@@ -255,6 +289,58 @@ namespace CInterpreterWpf
             }
 
             MemoryGrid.ItemsSource = memoryItems;
+        }
+
+        private void MemoryGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            UpdateStructInspector();
+        }
+
+        private void StructIndexTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            UpdateStructInspector();
+        }
+
+        private void UpdateStructInspector()
+        {
+            if (StructMemberGrid == null || StructInspectorInfoText == null)
+                return;
+
+            StructMemberGrid.ItemsSource = null;
+
+            if (_lastEvaluator == null || _currentSnapshot == null)
+            {
+                StructInspectorInfoText.Text = "No snapshot selected";
+                return;
+            }
+
+            if (MemoryGrid.SelectedItem is not MemoryDisplayItem selected ||
+                string.IsNullOrWhiteSpace(selected.VariableName))
+            {
+                StructInspectorInfoText.Text = "Select a struct array";
+                return;
+            }
+
+            if (!int.TryParse(StructIndexTextBox.Text, out int index))
+            {
+                StructInspectorInfoText.Text = "Index must be a number";
+                return;
+            }
+
+            try
+            {
+                var members = _lastEvaluator.InspectStructArrayElement(
+                    _currentSnapshot,
+                    selected.VariableName,
+                    index);
+
+                StructMemberGrid.ItemsSource = members;
+                StructInspectorInfoText.Text = $"{selected.VariableName}[{index}]";
+            }
+            catch (Exception ex)
+            {
+                StructInspectorInfoText.Text = ex.Message;
+            }
         }
 
         private void UpdateByteMemoryView(ExecutionSnapshot snapshot)

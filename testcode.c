@@ -264,6 +264,18 @@ int main() {
     char escstr[5] = "A\\\"B";
     printf("escapes: %d %d %d %d %s\n", '\n', '\t', '\\', '\'', escstr);
 
+    char mem_src[8] = "ABC";
+    char mem_dst[8];
+    memset(mem_dst, 0, sizeof(mem_dst));
+    memcpy(mem_dst, mem_src, 4);
+    memset(mem_dst + 1, 'x', 2);
+    int mem_values[3];
+    memset(mem_values, 0, sizeof(mem_values));
+    mem_values[0] = 11;
+    mem_values[1] = 22;
+    memcpy(mem_values + 2, mem_values, sizeof(int));
+    printf("memory funcs: %s %d %d %d\n", mem_dst, mem_values[0], mem_values[1], mem_values[2]);
+
     int compound=10;
     compound += 5;
     compound -= 3;

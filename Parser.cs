@@ -668,53 +668,55 @@ namespace CInterpreterWpf
 
         private IASTNode ParseStatement()
         {
+            int statementLine = CurrentToken.Line;
+
             if (CurrentToken.Type == TokenType.LBrace)
-                return ParseBlock();
+                return WithSourceLine(ParseBlock(), statementLine);
 
             if (CurrentToken.Type == TokenType.Typedef)
             {
-                return ParseTypedef(null); 
+                return WithSourceLine(ParseTypedef(null), statementLine);
             }
 
             if (CurrentToken.Type == TokenType.Enum &&
                 ((PeekToken().Type == TokenType.Identifier && PeekToken(2).Type == TokenType.LBrace) ||
                  PeekToken().Type == TokenType.LBrace))
             {
-                return ParseEnumDeclaration();
+                return WithSourceLine(ParseEnumDeclaration(), statementLine);
             }
 
             if (IsTypeStart())
             {
-                return ParseVariableDeclaration(true);
+                return WithSourceLine(ParseVariableDeclaration(true), statementLine);
             }
 
             if (CurrentToken.Type == TokenType.If)
-                return ParseIfStatement();
+                return WithSourceLine(ParseIfStatement(), statementLine);
 
             if (CurrentToken.Type == TokenType.While)
-                return ParseWhileStatement();
+                return WithSourceLine(ParseWhileStatement(), statementLine);
 
             if (CurrentToken.Type == TokenType.Do)
-                return ParseDoWhileStatement();
+                return WithSourceLine(ParseDoWhileStatement(), statementLine);
 
             if (CurrentToken.Type == TokenType.For)
-                return ParseForStatement();
+                return WithSourceLine(ParseForStatement(), statementLine);
 
             if (CurrentToken.Type == TokenType.Switch)
-                return ParseSwitchStatement();
+                return WithSourceLine(ParseSwitchStatement(), statementLine);
 
             if (CurrentToken.Type == TokenType.Break)
             {
                 Consume();
                 Expect(TokenType.Semicolon);
-                return new BreakNode();
+                return new BreakNode { Line = statementLine };
             }
 
             if (CurrentToken.Type == TokenType.Continue)
             {
                 Consume();
                 Expect(TokenType.Semicolon);
-                return new ContinueNode();
+                return new ContinueNode { Line = statementLine };
             }
 
             if (CurrentToken.Type == TokenType.Return)
@@ -725,36 +727,52 @@ namespace CInterpreterWpf
                     Value = CurrentToken.Type == TokenType.Semicolon ? null : ParseExpression()
                 };
                 Expect(TokenType.Semicolon);
-                return r;
+                return WithSourceLine(r, statementLine);
             }
 
             if (CurrentToken.Type == TokenType.Asterisk)
-                return ParseAssignmentStatement(true);
+                return WithSourceLine(ParseAssignmentStatement(true), statementLine);
 
             if (IsStartOfAssignment())
-                return ParseAssignmentStatement(true);
+                return WithSourceLine(ParseAssignmentStatement(true), statementLine);
 
             if (CurrentToken.Type == TokenType.Identifier && PeekToken().Type == TokenType.LParen)
-                return ParseFunctionCallStatement();
+                return WithSourceLine(ParseFunctionCallStatement(), statementLine);
 
             if (IsStartOfIncDecStatement())
             {
                 var expr = ParseExpression();
                 Expect(TokenType.Semicolon);
-                return expr;
+                return WithSourceLine(expr, statementLine);
             }
 
             throw new Exception($"Unknown statement at line {CurrentToken.Line}, column {CurrentToken.Column}");
         }
 
+        private static IASTNode WithSourceLine(IASTNode node, int line)
+        {
+            if (node is ISourceLineNode sourceLineNode)
+                sourceLineNode.Line = line;
+
+            if (node is VarDeclListNode list)
+            {
+                foreach (var declaration in list.Declarations)
+                    declaration.Line = line;
+            }
+
+            return node;
+        }
+
         private IASTNode ParseVariableDeclaration(bool expectSemicolon)
         {
+            int declarationLine = CurrentToken.Line;
             var baseType = ParseDeclarationBaseType();
             var list = new VarDeclListNode();
+            list.Line = declarationLine;
 
             while (true)
             {
-                var v = new VarDeclNode();
+                var v = new VarDeclNode { Line = declarationLine };
                 ApplyTypeInfo(v, baseType);
 
                 ParseVariableDeclarator(v);
@@ -1089,6 +1107,7 @@ namespace CInterpreterWpf
 
         private IASTNode ParseAssignmentStatement(bool expectSemicolon)
         {
+            int assignmentLine = CurrentToken.Line;
             IASTNode left;
 
             if (CurrentToken.Type == TokenType.Asterisk)
@@ -1123,6 +1142,7 @@ namespace CInterpreterWpf
 
             var a = new AssignmentNode
             {
+                Line = assignmentLine,
                 Left = left,
                 Operator = op,
                 Right = ParseExpression()
@@ -1189,14 +1209,20 @@ namespace CInterpreterWpf
 
         private IASTNode ParseFunctionCallStatement()
         {
+            int callLine = CurrentToken.Line;
             var c = ParseFunctionCallExpression();
+            c.Line = callLine;
             Expect(TokenType.Semicolon);
             return c;
         }
 
         private FunctionCallNode ParseFunctionCallExpression()
         {
-            var c = new FunctionCallNode { FunctionName = Expect(TokenType.Identifier).Value };
+            var c = new FunctionCallNode
+            {
+                Line = CurrentToken.Line,
+                FunctionName = Expect(TokenType.Identifier).Value
+            };
             Expect(TokenType.LParen);
 
             if (CurrentToken.Type != TokenType.RParen)
@@ -1215,6 +1241,7 @@ namespace CInterpreterWpf
 
         private IASTNode ParseIfStatement()
         {
+            int line = CurrentToken.Line;
             Expect(TokenType.If);
             Expect(TokenType.LParen);
             var condition = ParseExpression();
@@ -1231,6 +1258,7 @@ namespace CInterpreterWpf
 
             return new IfNode
             {
+                Line = line,
                 Condition = condition,
                 ThenBranch = thenBranch,
                 ElseBranch = elseBranch
@@ -1239,6 +1267,7 @@ namespace CInterpreterWpf
 
         private IASTNode ParseWhileStatement()
         {
+            int line = CurrentToken.Line;
             Expect(TokenType.While);
             Expect(TokenType.LParen);
             var condition = ParseExpression();
@@ -1246,6 +1275,7 @@ namespace CInterpreterWpf
 
             return new WhileNode
             {
+                Line = line,
                 Condition = condition,
                 Body = ParseStatement()
             };
@@ -1253,6 +1283,7 @@ namespace CInterpreterWpf
 
         private IASTNode ParseDoWhileStatement()
         {
+            int line = CurrentToken.Line;
             Expect(TokenType.Do);
             var body = ParseStatement();
             Expect(TokenType.While);
@@ -1263,6 +1294,7 @@ namespace CInterpreterWpf
 
             return new DoWhileNode
             {
+                Line = line,
                 Body = body,
                 Condition = condition
             };
@@ -1270,6 +1302,7 @@ namespace CInterpreterWpf
 
         private IASTNode ParseForStatement()
         {
+            int line = CurrentToken.Line;
             Expect(TokenType.For);
             Expect(TokenType.LParen);
 
@@ -1302,6 +1335,7 @@ namespace CInterpreterWpf
 
             return new ForNode
             {
+                Line = line,
                 Initializer = initializer,
                 Condition = condition,
                 Increment = increment,

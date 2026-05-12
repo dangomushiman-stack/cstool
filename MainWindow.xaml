@@ -26,7 +26,9 @@
                      FontFamily="Consolas"
                      FontSize="14"
                      Padding="5"
-                     VerticalScrollBarVisibility="Auto" />
+                     VerticalScrollBarVisibility="Auto"
+                     SelectionChanged="CodeEditor_SelectionChanged"
+                     TextChanged="CodeEditor_TextChanged" />
 
             <GridSplitter Grid.Row="1"
                           Height="5"
@@ -76,7 +78,7 @@
             </StackPanel>
 
             <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,8,0,0">
-                <TextBlock Text="Breakpoints (step numbers):"
+                <TextBlock Text="Breakpoints (line numbers):"
                            VerticalAlignment="Center"
                            Margin="0,0,8,0"/>
                 <TextBox x:Name="BreakpointTextBox"
@@ -87,6 +89,11 @@
                            VerticalAlignment="Center"
                            FontWeight="Bold"
                            Text="No snapshot selected"/>
+                <TextBlock x:Name="CaretInfoText"
+                           Margin="16,0,0,0"
+                           VerticalAlignment="Center"
+                           FontWeight="Bold"
+                           Text="Line: 1, Col: 1"/>
             </StackPanel>
         </Grid>
 
@@ -113,6 +120,8 @@
                         <DataTemplate>
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="{Binding Step}" Width="45"/>
+                                <TextBlock Text=" | Line " />
+                                <TextBlock Text="{Binding SourceLine}" Width="36"/>
                                 <TextBlock Text=" | " />
                                 <TextBlock Text="{Binding Event}" />
                             </StackPanel>
@@ -127,17 +136,53 @@
                           Background="LightGray"/>
 
             <GroupBox Grid.Row="2" Header="現在の生存変数ビュー" Margin="5">
-                <DataGrid x:Name="MemoryGrid"
-                          AutoGenerateColumns="False"
-                          IsReadOnly="True"
-                          Margin="5">
-                    <DataGrid.Columns>
-                        <DataGridTextColumn Header="Addr" Binding="{Binding Address}" Width="70"/>
-                        <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="90"/>
-                        <DataGridTextColumn Header="Variable" Binding="{Binding VariableName}" Width="100"/>
-                        <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="*"/>
-                    </DataGrid.Columns>
-                </DataGrid>
+                <Grid Margin="5">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="1.1*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="0.9*"/>
+                    </Grid.RowDefinitions>
+
+                    <DataGrid Grid.Row="0"
+                              x:Name="MemoryGrid"
+                              AutoGenerateColumns="False"
+                              IsReadOnly="True"
+                              SelectionChanged="MemoryGrid_SelectionChanged">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Addr" Binding="{Binding Address}" Width="70"/>
+                            <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="90"/>
+                            <DataGridTextColumn Header="Variable" Binding="{Binding VariableName}" Width="100"/>
+                            <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,6,0,4">
+                        <TextBlock Text="Struct element index:"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,8,0"/>
+                        <TextBox x:Name="StructIndexTextBox"
+                                 Width="70"
+                                 Height="24"
+                                 Text="0"
+                                 TextChanged="StructIndexTextBox_TextChanged"/>
+                        <TextBlock x:Name="StructInspectorInfoText"
+                                   VerticalAlignment="Center"
+                                   Margin="12,0,0,0"
+                                   Text="Select a struct array"/>
+                    </StackPanel>
+
+                    <DataGrid Grid.Row="2"
+                              x:Name="StructMemberGrid"
+                              AutoGenerateColumns="False"
+                              IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Member" Binding="{Binding MemberName}" Width="140"/>
+                            <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="90"/>
+                            <DataGridTextColumn Header="Addr" Binding="{Binding Address}" Width="70"/>
+                            <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
             </GroupBox>
 
             <GridSplitter Grid.Row="3"

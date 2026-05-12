@@ -5,6 +5,11 @@ namespace CInterpreterWpf
 {
     public interface IASTNode { }
 
+    public interface ISourceLineNode
+    {
+        int Line { get; set; }
+    }
+
     public class CTypeInfo
     {
         private int _pointerLevel;
@@ -153,8 +158,9 @@ namespace CInterpreterWpf
         public bool IsPrototype { get; set; }
     }
 
-    public class BlockNode : IASTNode
+    public class BlockNode : IASTNode, ISourceLineNode
     {
+        public int Line { get; set; }
         public List<IASTNode> Statements { get; } = new List<IASTNode>();
     }
 
@@ -168,8 +174,9 @@ namespace CInterpreterWpf
         public List<IASTNode> Elements { get; } = new List<IASTNode>();
     }
 
-    public class VarDeclNode : IASTNode
+    public class VarDeclNode : IASTNode, ISourceLineNode
     {
+        public int Line { get; set; }
         public CTypeInfo TypeInfo { get; } = new CTypeInfo();
         public string Type { get => TypeInfo.Type; set => TypeInfo.Type = value; }
         public string VarName { get; set; }
@@ -184,25 +191,34 @@ namespace CInterpreterWpf
         public string StructName { get => TypeInfo.StructName; set => TypeInfo.StructName = value; }
     }
 
-    public class VarDeclListNode : IASTNode
+    public class VarDeclListNode : IASTNode, ISourceLineNode
     {
+        public int Line { get; set; }
         public List<VarDeclNode> Declarations { get; } = new List<VarDeclNode>();
     }
 
-    public class FunctionCallNode : IASTNode
+    public class FunctionCallNode : IASTNode, ISourceLineNode
     {
+        public int Line { get; set; }
         public string FunctionName { get; set; }
         public List<IASTNode> Arguments { get; } = new List<IASTNode>();
     }
 
-    public class ReturnNode : IASTNode
+    public class ReturnNode : IASTNode, ISourceLineNode
     {
+        public int Line { get; set; }
         public IASTNode Value { get; set; }
     }
 
-    public class BreakNode : IASTNode { }
+    public class BreakNode : IASTNode, ISourceLineNode
+    {
+        public int Line { get; set; }
+    }
 
-    public class ContinueNode : IASTNode { }
+    public class ContinueNode : IASTNode, ISourceLineNode
+    {
+        public int Line { get; set; }
+    }
 
     public class NumberNode : IASTNode
     {
@@ -256,46 +272,53 @@ namespace CInterpreterWpf
         public IASTNode FalseExpression { get; set; }
     }
 
-    public class UnaryOpNode : IASTNode
+    public class UnaryOpNode : IASTNode, ISourceLineNode
     {
+        public int Line { get; set; }
         public string Operator { get; set; }
         public IASTNode Target { get; set; }
     }
 
-    public class PostfixOpNode : IASTNode
+    public class PostfixOpNode : IASTNode, ISourceLineNode
     {
+        public int Line { get; set; }
         public IASTNode Target { get; set; }
         public string Operator { get; set; }
     }
 
-    public class AssignmentNode : IASTNode
+    public class AssignmentNode : IASTNode, ISourceLineNode
     {
+        public int Line { get; set; }
         public IASTNode Left { get; set; }
         public string Operator { get; set; }
         public IASTNode Right { get; set; }
     }
 
-    public class IfNode : IASTNode
+    public class IfNode : IASTNode, ISourceLineNode
     {
+        public int Line { get; set; }
         public IASTNode Condition { get; set; }
         public IASTNode ThenBranch { get; set; }
         public IASTNode ElseBranch { get; set; }
     }
 
-    public class WhileNode : IASTNode
+    public class WhileNode : IASTNode, ISourceLineNode
     {
+        public int Line { get; set; }
         public IASTNode Condition { get; set; }
         public IASTNode Body { get; set; }
     }
 
-    public class DoWhileNode : IASTNode
+    public class DoWhileNode : IASTNode, ISourceLineNode
     {
+        public int Line { get; set; }
         public IASTNode Body { get; set; }
         public IASTNode Condition { get; set; }
     }
 
-    public class ForNode : IASTNode
+    public class ForNode : IASTNode, ISourceLineNode
     {
+        public int Line { get; set; }
         public IASTNode Initializer { get; set; }
         public IASTNode Condition { get; set; }
         public IASTNode Increment { get; set; }
@@ -309,8 +332,9 @@ namespace CInterpreterWpf
         public List<IASTNode> Statements { get; } = new List<IASTNode>();
     }
 
-    public class SwitchNode : IASTNode
+    public class SwitchNode : IASTNode, ISourceLineNode
     {
+        public int Line { get; set; }
         public IASTNode Expression { get; set; }
         public List<SwitchCaseNode> Cases { get; } = new List<SwitchCaseNode>();
     }
