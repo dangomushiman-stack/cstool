@@ -17,7 +17,7 @@ namespace CInterpreterWpf
             try
             {
                 // 1. Lexer (字句解析)
-                var lexer = new Lexer(sourceCode);
+                var lexer = new Lexer(sourceCode, null, _stdout);
                 List<Token> tokens = lexer.Tokenize();
 
                 // 2. Parser (構文解析)

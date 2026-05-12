@@ -75,7 +75,7 @@ namespace CInterpreterWpf
 
             try
             {
-                var lexer = new Lexer(sourceCode);
+                var lexer = new Lexer(sourceCode, null, printCallback);
                 var tokens = lexer.Tokenize();
                 var parser = new Parser(tokens);
                 var ast = parser.Parse();
@@ -284,7 +284,7 @@ namespace CInterpreterWpf
 
             try
             {
-                var lexer = new Lexer(CodeEditor.Text);
+                var lexer = new Lexer(CodeEditor.Text, null, printCallback);
                 var tokens = lexer.Tokenize();
                 var parser = new Parser(tokens);
                 var ast = parser.Parse();

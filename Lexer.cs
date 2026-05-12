@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Text;
+using System;
 
 namespace CInterpreterWpf
 {
@@ -11,8 +12,13 @@ namespace CInterpreterWpf
         private int _column = 1;
 
         public Lexer(string source)
+            : this(source, null, null)
         {
-            _source = Preprocessor.Process(source);
+        }
+
+        public Lexer(string source, string baseDirectory, Action<string> warningCallback = null)
+        {
+            _source = Preprocessor.Process(source, baseDirectory, warningCallback);
         }
 
         public List<Token> Tokenize()

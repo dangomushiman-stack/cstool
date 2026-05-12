@@ -1,3 +1,5 @@
+#include "predefs.h"
+
 typedef struct Point_st {
     int x;
     int y;
@@ -162,6 +164,7 @@ int main() {
     enum Mode multi_mode=MODE_ONE, multi_mode2=MODE_TWO;
     int *multi_ptr=&c, multi_plain=6;
     int pre_value = PRE_ADD(PRE_BASE, 5);
+    int include_value = INCLUDED_ADD(INCLUDED_BASE, 2);
 #ifdef PRE_ENABLED
     pre_value += 1;
 #else
@@ -170,7 +173,7 @@ int main() {
     b = &c;
     a = &b;
     printf("**a = %d\n",**a);
-    printf("preprocessor: %d\n", pre_value);
+    printf("preprocessor: %d %d\n", pre_value, include_value);
     
 
     p = pts;

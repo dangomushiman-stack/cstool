@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 
@@ -27,10 +28,26 @@ namespace CInterpreterWpf
 
         public static string Process(string source)
         {
+            return Process(source, null, null);
+        }
+
+        public static string Process(string source, string baseDirectory, Action<string> warningCallback = null)
+        {
             if (string.IsNullOrEmpty(source))
                 return source ?? "";
 
             var macros = new Dictionary<string, Macro>();
+            return Process(source, GetInitialBaseDirectory(baseDirectory), warningCallback, macros, new HashSet<string>(StringComparer.OrdinalIgnoreCase), true);
+        }
+
+        private static string Process(
+            string source,
+            string baseDirectory,
+            Action<string> warningCallback,
+            Dictionary<string, Macro> macros,
+            HashSet<string> includeStack,
+            bool preserveDirectiveLines)
+        {
             var conditionals = new Stack<ConditionalState>();
             var output = new StringBuilder();
             string[] lines = source.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
@@ -44,12 +61,26 @@ namespace CInterpreterWpf
 
                 if (isDirective)
                 {
-                    HandleDirective(trimmed.Substring(1).TrimStart(), macros, conditionals, active);
-                    output.AppendLine();
+                    string includeText = HandleDirective(
+                        trimmed.Substring(1).TrimStart(),
+                        macros,
+                        conditionals,
+                        active,
+                        baseDirectory,
+                        warningCallback,
+                        includeStack);
+
+                    if (includeText != null)
+                        output.Append(includeText);
+                    if (preserveDirectiveLines)
+                        output.AppendLine();
                     continue;
                 }
 
-                output.AppendLine(active ? ExpandLine(line, macros) : "");
+                if (active)
+                    output.AppendLine(ExpandLine(line, macros));
+                else if (preserveDirectiveLines)
+                    output.AppendLine();
             }
 
             if (conditionals.Count > 0)
@@ -58,16 +89,27 @@ namespace CInterpreterWpf
             return output.ToString();
         }
 
+        private static string GetInitialBaseDirectory(string baseDirectory)
+        {
+            if (!string.IsNullOrWhiteSpace(baseDirectory))
+                return Path.GetFullPath(baseDirectory);
+
+            return Directory.GetCurrentDirectory();
+        }
+
         private static bool IsActive(Stack<ConditionalState> conditionals)
         {
             return conditionals.Count == 0 || conditionals.Peek().IsActive;
         }
 
-        private static void HandleDirective(
+        private static string HandleDirective(
             string directive,
             Dictionary<string, Macro> macros,
             Stack<ConditionalState> conditionals,
-            bool active)
+            bool active,
+            string baseDirectory,
+            Action<string> warningCallback,
+            HashSet<string> includeStack)
         {
             string keyword = ReadIdentifier(directive, 0, out int pos);
             string rest = pos < directive.Length ? directive.Substring(pos).TrimStart() : "";
@@ -77,7 +119,7 @@ namespace CInterpreterWpf
                 case "define":
                     if (active)
                         DefineMacro(rest, macros);
-                    return;
+                    return null;
 
                 case "undef":
                     if (active)
@@ -86,33 +128,130 @@ namespace CInterpreterWpf
                         if (name.Length > 0)
                             macros.Remove(name);
                     }
-                    return;
+                    return null;
+
+                case "include":
+                    return active
+                        ? IncludeFile(rest, baseDirectory, warningCallback, macros, includeStack)
+                        : null;
 
                 case "ifdef":
                     PushConditional(conditionals, active && macros.ContainsKey(ReadIdentifier(rest, 0, out _)));
-                    return;
+                    return null;
 
                 case "ifndef":
                     PushConditional(conditionals, active && !macros.ContainsKey(ReadIdentifier(rest, 0, out _)));
-                    return;
+                    return null;
 
                 case "if":
                     PushConditional(conditionals, active && EvaluatePreprocessorExpression(rest, macros) != 0);
-                    return;
+                    return null;
 
                 case "else":
                     FlipConditional(conditionals);
-                    return;
+                    return null;
 
                 case "endif":
                     if (conditionals.Count == 0)
                         throw new Exception("Preprocessor Error: #endif without #if");
                     conditionals.Pop();
-                    return;
+                    return null;
 
                 default:
                     throw new Exception($"Preprocessor Error: unsupported directive '#{keyword}'");
             }
+        }
+
+        private static string IncludeFile(
+            string text,
+            string baseDirectory,
+            Action<string> warningCallback,
+            Dictionary<string, Macro> macros,
+            HashSet<string> includeStack)
+        {
+            if (!TryReadIncludeName(text, out string includeName))
+            {
+                warningCallback?.Invoke($"Preprocessor Warning: invalid #include '{text}'");
+                return "";
+            }
+
+            string path = ResolveIncludePath(includeName, baseDirectory);
+            if (path == null)
+            {
+                warningCallback?.Invoke($"Preprocessor Warning: include file not found '{includeName}'");
+                return "";
+            }
+
+            if (includeStack.Contains(path))
+            {
+                warningCallback?.Invoke($"Preprocessor Warning: recursive include skipped '{includeName}'");
+                return "";
+            }
+
+            includeStack.Add(path);
+            try
+            {
+                string includeSource = File.ReadAllText(path);
+                string includeDirectory = Path.GetDirectoryName(path);
+                return Process(includeSource, includeDirectory, warningCallback, macros, includeStack, false);
+            }
+            finally
+            {
+                includeStack.Remove(path);
+            }
+        }
+
+        private static bool TryReadIncludeName(string text, out string includeName)
+        {
+            includeName = null;
+            text = (text ?? "").Trim();
+
+            if (text.Length >= 2 && text[0] == '"')
+            {
+                int end = text.IndexOf('"', 1);
+                if (end > 1)
+                {
+                    includeName = text.Substring(1, end - 1);
+                    return includeName.Length > 0;
+                }
+            }
+
+            if (text.Length >= 2 && text[0] == '<')
+            {
+                int end = text.IndexOf('>', 1);
+                if (end > 1)
+                {
+                    includeName = text.Substring(1, end - 1);
+                    return includeName.Length > 0;
+                }
+            }
+
+            return false;
+        }
+
+        private static string ResolveIncludePath(string includeName, string baseDirectory)
+        {
+            var candidates = new List<string>();
+
+            if (Path.IsPathRooted(includeName))
+                candidates.Add(includeName);
+            else
+            {
+                if (!string.IsNullOrWhiteSpace(baseDirectory))
+                    candidates.Add(Path.Combine(baseDirectory, includeName));
+
+                candidates.Add(Path.Combine(Directory.GetCurrentDirectory(), includeName));
+                candidates.Add(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, includeName));
+            }
+
+            foreach (string candidate in candidates)
+            {
+                string fullPath = Path.GetFullPath(candidate);
+                if (File.Exists(fullPath))
+                    return fullPath;
+            }
+
+            return null;
         }
 
         private static void PushConditional(Stack<ConditionalState> conditionals, bool condition)

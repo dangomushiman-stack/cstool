@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("CInterpreterWpf")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+68c3bc9a4a6afc2bce5053200415d1223cf3aa0e")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+35c539290383576304a72ec3dfe8fac3daeb471c")]
 [assembly: System.Reflection.AssemblyProductAttribute("CInterpreterWpf")]
 [assembly: System.Reflection.AssemblyTitleAttribute("CInterpreterWpf")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
