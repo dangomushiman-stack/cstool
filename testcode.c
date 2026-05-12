@@ -3,6 +3,10 @@ typedef struct Point_st {
     int y;
 }Point;
 
+#define PRE_BASE 7
+#define PRE_ADD(a, b) ((a) + (b))
+#define PRE_ENABLED
+
 enum Mode {
     MODE_ZERO,
     MODE_ONE = 3,
@@ -157,9 +161,16 @@ int main() {
     Point multi_p1 = {5, 6}, multi_p2 = {7, 8};
     enum Mode multi_mode=MODE_ONE, multi_mode2=MODE_TWO;
     int *multi_ptr=&c, multi_plain=6;
+    int pre_value = PRE_ADD(PRE_BASE, 5);
+#ifdef PRE_ENABLED
+    pre_value += 1;
+#else
+    pre_value += 100;
+#endif
     b = &c;
     a = &b;
     printf("**a = %d\n",**a);
+    printf("preprocessor: %d\n", pre_value);
     
 
     p = pts;

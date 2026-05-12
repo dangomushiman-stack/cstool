@@ -12,7 +12,7 @@ namespace CInterpreterWpf
 
         public Lexer(string source)
         {
-            _source = source;
+            _source = Preprocessor.Process(source);
         }
 
         public List<Token> Tokenize()
